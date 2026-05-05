@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📈 Stock Analyzer Pro</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ═══════════════════ SIDEBAR ═══════════════════ -->
+<div class="sidebar" id="sidebar">
+  <div class="sidebar-logo">
+    <span class="logo-icon">📈</span>
+    <span class="logo-text">StockPro</span>
+  </div>
+
+  <nav class="sidebar-nav">
+    <button class="nav-btn active" onclick="showPage('home')" id="nav-home">
+      🏠 <span>Dashboard</span>
+    </button>
+    <button class="nav-btn" onclick="showPage('market')" id="nav-market">
+      📊 <span>Market</span>
+    </button>
+    <button class="nav-btn" onclick="showPage('screener')" id="nav-screener">
+      🔍 <span>Screeners</span>
+    </button>
+    <button class="nav-btn" onclick="showPage('watchlist')" id="nav-watchlist">
+      ⭐ <span>Watchlist</span>
+    </button>
+    <button class="nav-btn" onclick="showPage('etf')" id="nav-etf">
+      🏦 <span>ETF</span>
+    </button>
+    <button class="nav-btn" onclick="showPage('ipo')" id="nav-ipo">
+      🚀 <span>IPO</span>
+    </button>
+  </nav>
+
+  <div class="sidebar-footer">
+    <div class="market-time" id="market-clock">🕐 Loading...</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ MAIN CONTENT ═══════════════════ -->
+<div class="main-wrap">
+
+  <!-- TOP BAR -->
+  <div class="topbar">
+    <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
+    <div class="search-wrap">
+      <input type="text" id="search-input" placeholder="🔍  Stock search karo... (RELIANCE, TCS, INFY)"
+             oninput="onSearchInput()" onkeydown="onSearchKey(event)" autocomplete="off">
+      <div class="search-dropdown" id="search-dropdown"></div>
+    </div>
+    <div class="topbar-right">
+      <div class="market-badge" id="market-status">● Loading</div>
+    </div>
+  </div>
+
+  <!-- PAGES -->
+  <div class="page-content" id="page-content">
+
+    <!-- ── HOME PAGE ── -->
+    <div class="page active" id="page-home">
+      <div class="page-header">
+        <h2>🏠 Dashboard</h2>
+        <span class="page-sub">Market overview & quick analysis</span>
+      </div>
+
+      <!-- Quick access -->
+      <div class="quick-chips">
+        <span class="chip-label">Quick:</span>
+        <button class="chip" onclick="quickLoad('RELIANCE')">RELIANCE</button>
+        <button class="chip" onclick="quickLoad('TCS')">TCS</button>
+        <button class="chip" onclick="quickLoad('HDFCBANK')">HDFCBANK</button>
+        <button class="chip" onclick="quickLoad('INFY')">INFY</button>
+        <button class="chip" onclick="quickLoad('BHARTIARTL')">BHARTIARTL</button>
+        <button class="chip" onclick="quickLoad('WIPRO')">WIPRO</button>
+        <button class="chip" onclick="quickLoad('SBIN')">SBIN</button>
+        <button class="chip" onclick="quickLoad('BAJFINANCE')">BAJFINANCE</button>
+      </div>
+
+      <!-- Index strip -->
+      <div class="indices-strip" id="indices-strip">
+        <div class="loading-strip">📡 Indices load ho rahi hain...</div>
+      </div>
+
+      <!-- Home tabs: Trade Log + Heatmap categories -->
+      <div class="analysis-tabs" id="home-tabs">
+        <button class="atab active" onclick="switchHomeTab('tradelog',this)">📒 Trade Log</button>
+        <button class="atab" onclick="switchHomeTab('broad',this)">📊 Broad Market</button>
+        <button class="atab" onclick="switchHomeTab('sectoral',this)">🏭 Sectoral</button>
+        <button class="atab" onclick="switchHomeTab('thematic',this)">🎯 Thematic</button>
+        <button class="atab" onclick="switchHomeTab('strategy',this)">⚙️ Strategy</button>
+      </div>
+      <div id="home-tab-content">
+        <div class="loading-box">⏳ Loading...</div>
+      </div>
+
+      <!-- Analysis area (stock detail) -->
+      <div id="analysis-area" style="display:none">
+        <div class="welcome-box">
+          <div class="welcome-icon">📊</div>
+          <div class="welcome-title">Stock analyze karo</div>
+          <div class="welcome-sub">Upar search karo ya quick buttons use karo</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── MARKET PAGE ── -->
+    <div class="page" id="page-market">
+      <div class="page-header">
+        <h2>📊 Market</h2>
+        <div class="tab-pills" id="market-tabs">
+          <button class="pill active" onclick="loadMarket('gainers', this)">🟢 Gainers</button>
+          <button class="pill" onclick="loadMarket('losers', this)">🔴 Losers</button>
+          <button class="pill" onclick="loadMarket('volume', this)">📦 Volume Spurts</button>
+          <button class="pill" onclick="loadMarket('active', this)">⚡ Most Active</button>
+          <button class="pill" onclick="loadMarket('52high', this)">🚀 Near 52W High</button>
+          <button class="pill" onclick="loadMarket('52low', this)">📉 Near 52W Low</button>
+        </div>
+      </div>
+      <div id="market-content"><div class="loading-box">⏳ Loading...</div></div>
+    </div>
+
+    <!-- ── SCREENER PAGE ── -->
+    <div class="page" id="page-screener">
+      <div class="page-header">
+        <h2>🔍 Chartink Screeners</h2>
+        <span class="page-sub">Pre-built trading screeners</span>
+      </div>
+      <div class="screener-grid" id="screener-list">
+        <div class="loading-box">⏳ Loading screeners...</div>
+      </div>
+      <div id="screener-result"></div>
+    </div>
+
+    <!-- ── WATCHLIST PAGE ── -->
+    <div class="page" id="page-watchlist">
+      <div class="page-header">
+        <h2>⭐ My Watchlist</h2>
+        <button class="btn-sm" onclick="refreshWatchlist()">🔄 Refresh Prices</button>
+      </div>
+      <div id="watchlist-content"><div class="loading-box">⏳ Loading...</div></div>
+    </div>
+
+    <!-- ── ETF PAGE ── -->
+    <div class="page" id="page-etf">
+      <div class="page-header">
+        <h2>🏦 ETF</h2>
+        <div class="tab-pills">
+          <button class="pill active" onclick="loadEtf('list', this)">📋 ETF List</button>
+          <button class="pill" onclick="loadEtf('screener', this)">🔍 ETF Screener</button>
+        </div>
+      </div>
+      <div id="etf-content"><div class="loading-box">⏳ Loading ETFs...</div></div>
+    </div>
+
+    <!-- ── IPO PAGE ── -->
+    <div class="page" id="page-ipo">
+      <div class="page-header">
+        <h2>🚀 IPO Hub</h2>
+        <span class="page-sub">Live IPO data with GMP & scoring</span>
+        <button class="btn-sm" onclick="loadIpo()">🔄 Refresh</button>
+      </div>
+      <div id="ipo-content"><div class="loading-box">⏳ IPO data load ho rahi hai...</div></div>
+    </div>
+
+  </div><!-- end page-content -->
+</div><!-- end main-wrap -->
+
+<!-- ═══════════════════ ANALYSIS PANEL (full page overlay) ═══════════════════ -->
+<div class="analysis-panel" id="analysis-panel" style="display:none">
+  <div class="panel-topbar">
+    <button class="btn-back" onclick="closeAnalysis()">◀ Back</button>
+    <div class="panel-title" id="panel-title">Loading...</div>
+    <div class="panel-actions">
+      <button class="btn-wl" id="wl-btn" onclick="toggleWatchlist()">⭐ Watchlist</button>
+      <button class="btn-sm" onclick="openScreenerIn()">🏦 Screener.in</button>
+      <button class="btn-sm" id="cons-btn" onclick="toggleConsolidated()">📊 Consolidated</button>
+      <button class="btn-sm" onclick="openNSELive()" style="background:rgba(255,149,0,0.15);border-color:var(--orange);color:var(--orange)">📈 NSE Live</button>
+    </div>
+  </div>
+
+  <div class="panel-with-rpanel">
+    <!-- Main content -->
+    <div class="panel-body" id="panel-body">
+      <div class="loading-full">
+        <div class="spinner"></div>
+        <div>Stock data fetch ho rahi hai...</div>
+      </div>
+    </div>
+
+    <!-- Right panel: News & Documents + Indices -->
+    <div class="rpanel" id="rpanel">
+      <div class="rpanel-header">
+        <span>📰 News & Documents</span>
+        <button class="rpanel-refresh" onclick="refreshRpanel()" title="Refresh">🔄</button>
+      </div>
+      <div class="rpanel-body" id="rpanel-body">
+        <!-- Indices by default, news when stock loaded -->
+        <div id="rpanel-indices">
+          <div class="rpanel-idx-section" id="rp-broad">
+            <div class="rpanel-idx-hdr" style="background:#1A3060" onclick="toggleRpSection('broad')">
+              <span class="rp-arrow" id="rp-arr-broad">▾</span>
+              <span>📊 Broad Market Indices</span>
+              <span class="rp-count" id="rp-cnt-broad">—</span>
+            </div>
+            <div class="rpanel-idx-rows" id="rp-rows-broad"></div>
+          </div>
+          <div class="rpanel-idx-section" id="rp-sectoral">
+            <div class="rpanel-idx-hdr" style="background:#2D1A50" onclick="toggleRpSection('sectoral')">
+              <span class="rp-arrow" id="rp-arr-sectoral">▸</span>
+              <span>🏭 Sectoral Indices</span>
+              <span class="rp-count" id="rp-cnt-sectoral">—</span>
+            </div>
+            <div class="rpanel-idx-rows" id="rp-rows-sectoral" style="display:none"></div>
+          </div>
+          <div class="rpanel-idx-section" id="rp-thematic">
+            <div class="rpanel-idx-hdr" style="background:#0D3030" onclick="toggleRpSection('thematic')">
+              <span class="rp-arrow" id="rp-arr-thematic">▸</span>
+              <span>🎯 Thematic Indices</span>
+              <span class="rp-count" id="rp-cnt-thematic">—</span>
+            </div>
+            <div class="rpanel-idx-rows" id="rp-rows-thematic" style="display:none"></div>
+          </div>
+          <div class="rpanel-idx-section" id="rp-strategy">
+            <div class="rpanel-idx-hdr" style="background:#3D1A00" onclick="toggleRpSection('strategy')">
+              <span class="rp-arrow" id="rp-arr-strategy">▸</span>
+              <span>⚙️ Strategy Indices</span>
+              <span class="rp-count" id="rp-cnt-strategy">—</span>
+            </div>
+            <div class="rpanel-idx-rows" id="rp-rows-strategy" style="display:none"></div>
+          </div>
+          <div style="padding:8px 10px">
+            <button class="btn-sm" style="width:100%;text-align:center" onclick="loadRpIndices()">🔄 Refresh Indices</button>
+          </div>
+        </div>
+        <div id="rpanel-news" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>
