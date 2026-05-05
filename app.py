@@ -2,8 +2,7 @@
 Stock Analyzer Pro — Flask Web Backend
 stock_analyzer_v34.py ki saari logic ka web wrapper.
 """
-import os
-import sys, os, threading, json, datetime, re
+import sys, os, threading, json, datetime, re, hashlib, secrets
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
@@ -20,10 +19,12 @@ from stock_analyzer_v34 import (
     NSE_SESSION,
 )
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, session, redirect, url_for
+from werkzeug.security import generate_password_hash, check_password_hash
 import requests as _req
 
 app = Flask(__name__)
+app.secret_key = secrets.token_hex(32)  # Session encryption key
 
 BROAD = {'NIFTY 50','NIFTY NEXT 50','NIFTY 100','NIFTY 200','NIFTY 500','NIFTY MIDCAP 50','NIFTY MIDCAP 100','NIFTY MIDCAP 150','NIFTY SMLCAP 50','NIFTY SMLCAP 100','NIFTY SMLCAP 250','NIFTY MIDSML 400','NIFTY LARGEMID250','NIFTY MID SELECT','NIFTY MICROCAP250','NIFTY TOTAL MKT','INDIA VIX','NIFTY500 MULTICAP','NIFTY500 LMS EQL','NIFTY FPI 150'}
 SECTORAL = {'NIFTY AUTO','NIFTY BANK','NIFTY FIN SERVICE','NIFTY FINSRV25 50','NIFTY FMCG','NIFTY IT','NIFTY MEDIA','NIFTY METAL','NIFTY PHARMA','NIFTY PSU BANK','NIFTY REALTY','NIFTY PVT BANK','NIFTY HEALTHCARE','NIFTY CONSR DURBL','NIFTY OIL AND GAS','NIFTY MIDSML HLTH','NIFTY CHEMICALS','NIFTY500 HEALTH','NIFTY FINSEREXBNK','NIFTY MS IT TELCM','NIFTY MS FIN SERV'}
@@ -540,14 +541,125 @@ def _fetch_ipo_data_internal():
         ipo['score']=score; ipo['score_reasons']=reasons
     return ipos
 
+# ══════════════════════════════════════════════════════════════════════════════
+# AUTH SYSTEM — Email + Password
+# ══════════════════════════════════════════════════════════════════════════════
+
+USERS_FILE = os.path.join(BASE, 'users.json')
+
+def _load_users():
+    try:
+        if os.path.exists(USERS_FILE):
+            with open(USERS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except: pass
+    return {}
+
+def _save_users(users):
+    try:
+        with open(USERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(users, f, ensure_ascii=False, indent=2)
+    except: pass
+
+def _current_user_id():
+    """Get logged-in user's ID from session"""
+    return session.get('user_id', '')
+
+def _login_required(f):
+    """Decorator — redirect to login if not logged in"""
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('user_id'):
+            if request.is_json or request.path.startswith('/api/'):
+                return jsonify({'error': 'Login required', 'redirect': '/login'}), 401
+            return redirect('/login')
+        return f(*args, **kwargs)
+    return decorated
+
+# ── Auth Routes ───────────────────────────────────────────────────────────────
+
+@app.route('/login', methods=['GET', 'POST'])
+def login_page():
+    if session.get('user_id'):
+        return redirect('/')
+    if request.method == 'GET':
+        return render_template('auth.html', mode='login')
+    # POST — login
+    data  = request.get_json(silent=True) or {}
+    email = data.get('email', '').strip().lower()
+    pwd   = data.get('password', '')
+    if not email or not pwd:
+        return jsonify({'error': 'Email aur password dono chahiye'}), 400
+    users = _load_users()
+    user  = users.get(email)
+    if not user or not check_password_hash(user['password'], pwd):
+        return jsonify({'error': 'Email ya password galat hai'}), 401
+    session['user_id']    = email
+    session['user_name']  = user.get('name', email.split('@')[0])
+    session.permanent     = True
+    return jsonify({'ok': True, 'name': session['user_name']})
+
+@app.route('/register', methods=['GET', 'POST'])
+def register_page():
+    if session.get('user_id'):
+        return redirect('/')
+    if request.method == 'GET':
+        return render_template('auth.html', mode='register')
+    # POST — register
+    data  = request.get_json(silent=True) or {}
+    email = data.get('email', '').strip().lower()
+    pwd   = data.get('password', '')
+    name  = data.get('name', '').strip()
+    if not email or not pwd or not name:
+        return jsonify({'error': 'Naam, email aur password sab chahiye'}), 400
+    if len(pwd) < 6:
+        return jsonify({'error': 'Password kam se kam 6 characters ka hona chahiye'}), 400
+    if '@' not in email or '.' not in email.split('@')[-1]:
+        return jsonify({'error': 'Valid email address daalo'}), 400
+    users = _load_users()
+    if email in users:
+        return jsonify({'error': 'Yeh email already registered hai'}), 409
+    users[email] = {
+        'name':     name,
+        'email':    email,
+        'password': generate_password_hash(pwd),
+        'created':  datetime.datetime.now().isoformat(),
+    }
+    _save_users(users)
+    session['user_id']   = email
+    session['user_name'] = name
+    session.permanent    = True
+    return jsonify({'ok': True, 'name': name})
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect('/login')
+
+@app.route('/api/me')
+def api_me():
+    uid = session.get('user_id', '')
+    if not uid:
+        return jsonify({'logged_in': False})
+    return jsonify({
+        'logged_in': True,
+        'email':     uid,
+        'name':      session.get('user_name', uid.split('@')[0]),
+    })
+
 def _user_data():
-    """Get data for current user (identified by X-User-ID header or cookie)"""
-    uid = request.headers.get('X-User-ID','').strip() or request.cookies.get('uid','').strip()
-    if not uid or len(uid) < 3 or len(uid) > 50:
+    """Get data for logged-in user"""
+    uid = _current_user_id()
+    if not uid:
+        # Fallback to X-User-ID header (backward compat)
+        uid = request.headers.get('X-User-ID','').strip()
+    if not uid:
         uid = 'default'
-    # Sanitize — only alphanumeric + underscore
-    uid = re.sub(r'[^a-zA-Z0-9_\-]', '', uid)[:40] or 'default'
-    user_file = os.path.join(BASE, f'userdata_{uid}.json')
+    uid = re.sub(r'[^a-zA-Z0-9_@.\-]', '', uid)[:60] or 'default'
+    # Use email as filename (sanitized)
+    safe = re.sub(r'[^a-zA-Z0-9_\-]', '_', uid)[:50]
+    user_file = os.path.join(BASE, f'userdata_{safe}.json')
     try:
         if os.path.exists(user_file):
             with open(user_file, 'r', encoding='utf-8') as f:
@@ -556,12 +668,14 @@ def _user_data():
     return {'watchlist': {}, 'notes': {}, 'trades': {}}
 
 def _save_user_data(data):
-    """Save data for current user"""
-    uid = request.headers.get('X-User-ID','').strip() or request.cookies.get('uid','').strip()
-    if not uid or len(uid) < 3 or len(uid) > 50:
+    """Save data for logged-in user"""
+    uid = _current_user_id()
+    if not uid:
+        uid = request.headers.get('X-User-ID','').strip()
+    if not uid:
         uid = 'default'
-    uid = re.sub(r'[^a-zA-Z0-9_\-]', '', uid)[:40] or 'default'
-    user_file = os.path.join(BASE, f'userdata_{uid}.json')
+    safe = re.sub(r'[^a-zA-Z0-9_\-]', '_', uid)[:50]
+    user_file = os.path.join(BASE, f'userdata_{safe}.json')
     try:
         with open(user_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -570,6 +684,7 @@ def _save_user_data(data):
 # ═══════════════════ ROUTES ═══════════════════════════════════════════════════
 
 @app.route('/')
+@_login_required
 def home():
     return render_template('index.html')
 

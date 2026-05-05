@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📈 Stock Analyzer Pro — {{ 'Login' if mode == 'login' else 'Register' }}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #060912;
+    color: #F0F4FF;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .card {
+    background: #11162C;
+    border: 1px solid #1C2240;
+    border-radius: 20px;
+    padding: 40px 36px;
+    width: 100%;
+    max-width: 420px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  }
+  .logo { text-align: center; margin-bottom: 28px; }
+  .logo-icon { font-size: 44px; }
+  .logo-title { font-size: 22px; font-weight: 800; color: #4D8EFF; margin-top: 8px; }
+  .logo-sub { font-size: 13px; color: #8B92B8; margin-top: 4px; }
+
+  h2 { font-size: 18px; font-weight: 700; margin-bottom: 24px; text-align: center; }
+
+  .form-group { margin-bottom: 16px; }
+  label { display: block; font-size: 12px; color: #8B92B8; margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  input {
+    width: 100%;
+    background: #0C1121;
+    border: 1px solid #1C2240;
+    color: #F0F4FF;
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 15px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  input:focus { border-color: #4D8EFF; }
+  input::placeholder { color: #3A4060; }
+
+  .btn {
+    width: 100%;
+    background: #4D8EFF;
+    border: none;
+    color: white;
+    padding: 13px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    margin-top: 8px;
+    transition: background 0.2s;
+  }
+  .btn:hover { background: #3A7AFF; }
+  .btn:disabled { background: #1C2240; color: #8B92B8; cursor: not-allowed; }
+
+  .error-msg {
+    background: rgba(255,61,92,0.1);
+    border: 1px solid rgba(255,61,92,0.3);
+    color: #FF3D5C;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 16px;
+    display: none;
+  }
+  .success-msg {
+    background: rgba(0,230,168,0.1);
+    border: 1px solid rgba(0,230,168,0.3);
+    color: #00E6A8;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 16px;
+    display: none;
+  }
+
+  .switch-link {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 13px;
+    color: #8B92B8;
+  }
+  .switch-link a { color: #4D8EFF; text-decoration: none; font-weight: 600; }
+  .switch-link a:hover { text-decoration: underline; }
+
+  .divider {
+    border: none;
+    border-top: 1px solid #1C2240;
+    margin: 20px 0;
+  }
+
+  .password-wrap { position: relative; }
+  .toggle-pwd {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: #8B92B8;
+    cursor: pointer;
+    font-size: 16px;
+    padding: 4px;
+  }
+  .toggle-pwd:hover { color: #4D8EFF; }
+
+  @media (max-width: 480px) {
+    .card { padding: 28px 20px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="logo">
+    <div class="logo-icon">📈</div>
+    <div class="logo-title">Stock Analyzer Pro</div>
+    <div class="logo-sub">NSE Live • Technical Analysis • Portfolio Tracker</div>
+  </div>
+
+  <h2>{{ '🔐 Login karo' if mode == 'login' else '📝 Account banao' }}</h2>
+
+  <div class="error-msg"   id="err-msg"></div>
+  <div class="success-msg" id="ok-msg"></div>
+
+  <form id="auth-form">
+    {% if mode == 'register' %}
+    <div class="form-group">
+      <label>Apna Naam</label>
+      <input type="text" id="name" placeholder="e.g. Sumeet Naik" autocomplete="name" required>
+    </div>
+    {% endif %}
+
+    <div class="form-group">
+      <label>Email Address</label>
+      <input type="email" id="email" placeholder="you@example.com" autocomplete="email" required>
+    </div>
+
+    <div class="form-group">
+      <label>Password</label>
+      <div class="password-wrap">
+        <input type="password" id="password"
+               placeholder="{{ 'Apna password daalo' if mode == 'login' else 'Kam se kam 6 characters' }}"
+               autocomplete="{{ 'current-password' if mode == 'login' else 'new-password' }}" required>
+        <button type="button" class="toggle-pwd" onclick="togglePwd()">👁</button>
+      </div>
+    </div>
+
+    <button type="submit" class="btn" id="submit-btn">
+      {{ '🔐 Login' if mode == 'login' else '✅ Account Banao' }}
+    </button>
+  </form>
+
+  <hr class="divider">
+
+  <div class="switch-link">
+    {% if mode == 'login' %}
+      Account nahi hai? <a href="/register">Register karo</a>
+    {% else %}
+      Already account hai? <a href="/login">Login karo</a>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+  const MODE = '{{ mode }}';
+
+  function togglePwd() {
+    const inp = document.getElementById('password');
+    inp.type = inp.type === 'password' ? 'text' : 'password';
+  }
+
+  function showErr(msg) {
+    const el = document.getElementById('err-msg');
+    el.textContent = msg; el.style.display = 'block';
+    document.getElementById('ok-msg').style.display = 'none';
+  }
+  function showOk(msg) {
+    const el = document.getElementById('ok-msg');
+    el.textContent = msg; el.style.display = 'block';
+    document.getElementById('err-msg').style.display = 'none';
+  }
+
+  document.getElementById('auth-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Please wait...';
+
+    const email    = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    const body     = { email, password };
+
+    if (MODE === 'register') {
+      body.name = document.getElementById('name').value.trim();
+    }
+
+    try {
+      const url = MODE === 'login' ? '/login' : '/register';
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+
+      if (data.ok) {
+        showOk(MODE === 'login'
+          ? `✅ Welcome back, ${data.name}! Redirect ho raha hai...`
+          : `✅ Account ban gaya, ${data.name}! Redirect ho raha hai...`
+        );
+        setTimeout(() => window.location.href = '/', 1000);
+      } else {
+        showErr(data.error || 'Kuch galat hua, dobara try karo');
+        btn.disabled = false;
+        btn.textContent = MODE === 'login' ? '🔐 Login' : '✅ Account Banao';
+      }
+    } catch(err) {
+      showErr('Network error — server se connect nahi ho pa raha');
+      btn.disabled = false;
+      btn.textContent = MODE === 'login' ? '🔐 Login' : '✅ Account Banao';
+    }
+  });
+
+  // Auto-focus first field
+  document.addEventListener('DOMContentLoaded', () => {
+    const first = document.querySelector('input');
+    if (first) first.focus();
+  });
+</script>
+</body>
+</html>

@@ -35,8 +35,8 @@ window.fetch = function(url, opts = {}) {
 
 // ── Init ───────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  // Setup User ID first — then load everything
-  setupUserId(() => {
+  // Check login status first
+  setupAuth(() => {
     updateClock();
     setInterval(updateClock, 60000);
     loadIndices();
@@ -46,95 +46,45 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-// ── User ID Setup ──────────────────────────────
-function setupUserId(callback) {
-  const uid = getUserId();
-  if (uid && uid.length >= 2) {
-    // Already set — show in UI and continue
-    showUserBadge(uid);
-    callback();
-    return;
-  }
-  // First time — show modal to set name
-  showUserSetupModal(callback);
-}
-
-function showUserSetupModal(callback) {
-  const modal = document.createElement('div');
-  modal.id = 'user-setup-modal';
-  modal.style.cssText = `
-    position:fixed;inset:0;z-index:9999;
-    background:rgba(6,9,18,0.95);
-    display:flex;align-items:center;justify-content:center;
-  `;
-  modal.innerHTML = `
-    <div style="background:#11162C;border:1px solid #1C2240;border-radius:16px;padding:32px;max-width:380px;width:90%;text-align:center">
-      <div style="font-size:40px;margin-bottom:12px">📊</div>
-      <div style="font-size:20px;font-weight:800;color:#F0F4FF;margin-bottom:8px">Stock Analyzer Pro</div>
-      <div style="font-size:13px;color:#8B92B8;margin-bottom:24px">
-        Apna naam ya ID set karo.<br>
-        Isse tera data kisi bhi device pe sync hoga.
-      </div>
-      <input id="uid-input" type="text" placeholder="e.g. sumeet, rahul123"
-        style="width:100%;background:#0C1121;border:1px solid #1C2240;color:#F0F4FF;
-               padding:12px 16px;border-radius:8px;font-size:15px;outline:none;
-               text-align:center;margin-bottom:16px"
-        maxlength="30" autocomplete="off" spellcheck="false">
-      <div style="font-size:11px;color:#555;margin-bottom:20px">
-        ⚠️ Yeh ID private rakho — isse tera data access hoga
-      </div>
-      <button id="uid-btn"
-        style="width:100%;background:#4D8EFF;border:none;color:white;
-               padding:12px;border-radius:8px;font-size:15px;font-weight:700;
-               cursor:pointer">
-        ✅ Start karo
-      </button>
-    </div>`;
-  document.body.appendChild(modal);
-
-  const input = modal.querySelector('#uid-input');
-  const btn   = modal.querySelector('#uid-btn');
-  input.focus();
-
-  const proceed = () => {
-    const val = input.value.trim().replace(/[^a-zA-Z0-9_\-]/g, '');
-    if (val.length < 2) {
-      input.style.borderColor = '#FF3D5C';
-      input.placeholder = 'Kam se kam 2 characters chahiye!';
-      return;
+// ── Auth Setup ─────────────────────────────────
+async function setupAuth(callback) {
+  try {
+    const res  = await fetch('/api/me');
+    const data = await res.json();
+    if (data.logged_in) {
+      setUserId(data.email);
+      showUserBadge(data.name, data.email);
+      callback();
+    } else {
+      // Not logged in — redirect to login
+      window.location.href = '/login';
     }
-    setUserId(val);
-    modal.remove();
-    showUserBadge(val);
+  } catch(e) {
+    // Server error — still try to load
     callback();
-  };
-
-  btn.onclick = proceed;
-  input.onkeydown = e => { if (e.key === 'Enter') proceed(); };
+  }
 }
 
-function showUserBadge(uid) {
-  // Show user ID in topbar
+function setupUserId(callback) { callback(); } // kept for compat
+
+function showUserBadge(name, email) {
   const topbar = document.querySelector('.topbar-right');
   if (!topbar) return;
   let badge = document.getElementById('user-badge');
   if (!badge) {
     badge = document.createElement('div');
     badge.id = 'user-badge';
-    badge.style.cssText = 'font-size:11px;color:#8B92B8;cursor:pointer;padding:4px 8px;border-radius:4px;border:1px solid #1C2240;margin-right:8px';
-    badge.title = 'Click to change user ID';
-    badge.onclick = () => {
-      const newId = prompt('Naya User ID:', getUserId());
-      if (newId && newId.trim().length >= 2) {
-        setUserId(newId.trim().replace(/[^a-zA-Z0-9_\-]/g, ''));
-        showUserBadge(getUserId());
-        showToast('✅ User ID updated! Page reload ho raha hai...');
-        setTimeout(() => location.reload(), 1500);
-      }
-    };
+    badge.style.cssText = 'display:flex;align-items:center;gap:8px;margin-right:8px';
     topbar.insertBefore(badge, topbar.firstChild);
   }
-  badge.textContent = `👤 ${uid}`;
+  badge.innerHTML = `
+    <span style="font-size:12px;color:#8B92B8;padding:4px 8px;border-radius:4px;border:1px solid #1C2240">
+      👤 ${escHTML(name || email || 'User')}
+    </span>
+    <a href="/logout" style="font-size:11px;color:#FF3D5C;text-decoration:none;padding:4px 8px;border:1px solid rgba(255,61,92,0.3);border-radius:4px"
+       onclick="return confirm('Logout karna chahte ho?')">
+      Logout
+    </a>`;
 }
 
 // ── One-time migration from server → localStorage ──
