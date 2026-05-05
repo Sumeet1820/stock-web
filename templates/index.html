@@ -175,6 +175,17 @@
   <div class="panel-topbar">
     <button class="btn-back" onclick="closeAnalysis()">◀ Back</button>
     <div class="panel-title" id="panel-title">Loading...</div>
+
+    <!-- Search bar — visible in analysis panel too -->
+    <div class="search-wrap panel-search">
+      <input type="text" id="panel-search-input"
+             placeholder="🔍 Stock search karo..."
+             oninput="onPanelSearchInput()"
+             onkeydown="onPanelSearchKey(event)"
+             autocomplete="off">
+      <div class="search-dropdown" id="panel-search-dropdown"></div>
+    </div>
+
     <div class="panel-actions">
       <button class="btn-wl" id="wl-btn" onclick="toggleWatchlist()">⭐ Watchlist</button>
       <button class="btn-sm" onclick="openScreenerIn()">🏦 Screener.in</button>

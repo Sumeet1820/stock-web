@@ -54,13 +54,33 @@ async function setupAuth(callback) {
     if (data.logged_in) {
       setUserId(data.email);
       showUserBadge(data.name, data.email);
+
+      // Restore last visited page/tab from URL hash
+      const hash = window.location.hash.replace('#', '');
+      const validPages = ['home','market','screener','watchlist','etf','ipo'];
+      const homeTabs   = ['tradelog','broad','sectoral','thematic','strategy'];
+
+      if (hash.startsWith('home-')) {
+        // e.g. #home-broad → home page + broad tab
+        const tab = hash.replace('home-', '');
+        if (homeTabs.includes(tab)) {
+          // Show home page first (already active by default)
+          callback();
+          // Then switch to the saved tab (after a tick so DOM is ready)
+          setTimeout(() => switchHomeTab(tab), 50);
+          return;
+        }
+      } else if (hash && validPages.includes(hash) && hash !== 'home') {
+        callback();
+        setTimeout(() => showPage(hash), 50);
+        return;
+      }
+
       callback();
     } else {
-      // Not logged in — redirect to login
       window.location.href = '/login';
     }
   } catch(e) {
-    // Server error — still try to load
     callback();
   }
 }
@@ -118,19 +138,36 @@ function showPage(page) {
   document.getElementById('page-' + page).classList.add('active');
   document.getElementById('nav-' + page).classList.add('active');
 
-  // Auto-close sidebar on mobile after nav
+  // Save current page in URL hash
+  history.replaceState(null, '', '#' + page);
+
+  // Auto-close sidebar on mobile
   if (window.innerWidth <= 900) {
     document.getElementById('sidebar').classList.remove('open');
     const ov = document.getElementById('sidebar-overlay');
     if (ov) ov.classList.remove('show');
   }
 
-  // Load content on first visit
   if (page === 'market')    loadMarket('gainers');
   if (page === 'screener')  loadScreenerList();
   if (page === 'watchlist') loadWatchlist();
   if (page === 'etf')       loadEtf('list');
   if (page === 'ipo')       loadIpo();
+}
+
+function switchHomeTab(tab, btn) {
+  document.querySelectorAll('#home-tabs .atab').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  else {
+    const btns = document.querySelectorAll('#home-tabs .atab');
+    const idx = ['tradelog','broad','sectoral','thematic','strategy'].indexOf(tab);
+    if (idx >= 0 && btns[idx]) btns[idx].classList.add('active');
+  }
+  // Save home tab in hash too
+  history.replaceState(null, '', '#home-' + tab);
+
+  if (tab === 'tradelog') renderTradeLog();
+  else loadHeatmap(tab);
 }
 
 function toggleSidebar() {
@@ -1466,21 +1503,6 @@ async function loadNews(sym) {
 }
 
 // ══════════════════════════════════════════════
-// HOME TAB SWITCHER (Trade Log + Heatmaps)
-// ══════════════════════════════════════════════
-function switchHomeTab(tab, btn) {
-  document.querySelectorAll('#home-tabs .atab').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
-  else {
-    const btns = document.querySelectorAll('#home-tabs .atab');
-    const idx = ['tradelog','broad','sectoral','thematic','strategy'].indexOf(tab);
-    if (idx >= 0 && btns[idx]) btns[idx].classList.add('active');
-  }
-  if (tab === 'tradelog') renderTradeLog();
-  else loadHeatmap(tab);
-}
-
-// ══════════════════════════════════════════════
 // HEATMAP — Index categories + Stock heatmap
 // ══════════════════════════════════════════════
 
@@ -1858,6 +1880,58 @@ function closeAnalysis() {
   document.getElementById('analysis-panel').style.display = 'none';
   currentData = null; currentSym = null; currentUrl = null;
   if (currentPriceChart) { currentPriceChart.destroy(); currentPriceChart = null; }
+}
+
+// ── Panel Search (search bar inside analysis panel) ──
+let panelSearchTimer = null;
+
+function onPanelSearchInput() {
+  clearTimeout(panelSearchTimer);
+  const q = document.getElementById('panel-search-input').value.trim();
+  if (q.length < 2) { closePanelDropdown(); return; }
+  panelSearchTimer = setTimeout(() => fetchPanelSuggestions(q), 300);
+}
+
+async function fetchPanelSuggestions(q) {
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    showPanelDropdown(data);
+  } catch { closePanelDropdown(); }
+}
+
+function showPanelDropdown(results) {
+  const dd = document.getElementById('panel-search-dropdown');
+  if (!results || !results.length) { closePanelDropdown(); return; }
+  dd.innerHTML = results.map(r => {
+    let sym = r.symbol || '';
+    if (!sym && r.url) { const m = r.url.match(/\/company\/([^/]+)\//i); if (m) sym = m[1].toUpperCase(); }
+    if (!sym) sym = r.name.split(' ')[0].toUpperCase();
+    return `<div class="dd-item" onclick="loadFromPanelSearch('${escHTML(r.url)}','${escHTML(r.name)}')">
+      <span class="sym">${escHTML(sym)}</span>
+      <span class="name">${escHTML(r.name)}</span>
+    </div>`;
+  }).join('');
+  dd.classList.add('open');
+}
+
+function closePanelDropdown() {
+  const dd = document.getElementById('panel-search-dropdown');
+  if (dd) dd.classList.remove('open');
+}
+
+function onPanelSearchKey(e) {
+  if (e.key === 'Enter') {
+    const q = document.getElementById('panel-search-input').value.trim();
+    if (q) { closePanelDropdown(); loadStockBySymbol(q.toUpperCase()); document.getElementById('panel-search-input').value = ''; }
+  }
+  if (e.key === 'Escape') closePanelDropdown();
+}
+
+function loadFromPanelSearch(url, name) {
+  closePanelDropdown();
+  document.getElementById('panel-search-input').value = '';
+  loadStockByUrl(url, name);
 }
 
 // ══════════════════════════════════════════════
