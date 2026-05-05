@@ -540,6 +540,33 @@ def _fetch_ipo_data_internal():
         ipo['score']=score; ipo['score_reasons']=reasons
     return ipos
 
+def _user_data():
+    """Get data for current user (identified by X-User-ID header or cookie)"""
+    uid = request.headers.get('X-User-ID','').strip() or request.cookies.get('uid','').strip()
+    if not uid or len(uid) < 3 or len(uid) > 50:
+        uid = 'default'
+    # Sanitize — only alphanumeric + underscore
+    uid = re.sub(r'[^a-zA-Z0-9_\-]', '', uid)[:40] or 'default'
+    user_file = os.path.join(BASE, f'userdata_{uid}.json')
+    try:
+        if os.path.exists(user_file):
+            with open(user_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except: pass
+    return {'watchlist': {}, 'notes': {}, 'trades': {}}
+
+def _save_user_data(data):
+    """Save data for current user"""
+    uid = request.headers.get('X-User-ID','').strip() or request.cookies.get('uid','').strip()
+    if not uid or len(uid) < 3 or len(uid) > 50:
+        uid = 'default'
+    uid = re.sub(r'[^a-zA-Z0-9_\-]', '', uid)[:40] or 'default'
+    user_file = os.path.join(BASE, f'userdata_{uid}.json')
+    try:
+        with open(user_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except: pass
+
 # ═══════════════════ ROUTES ═══════════════════════════════════════════════════
 
 @app.route('/')
@@ -917,68 +944,78 @@ def api_ipo():
 
 @app.route('/api/watchlist',methods=['GET'])
 def api_watchlist_get():
-    return jsonify(APP_DATA.get('watchlist',{}))
+    return jsonify(_user_data().get('watchlist',{}))
 
 @app.route('/api/watchlist/<sym>',methods=['POST','DELETE'])
 def api_watchlist_sym(sym):
     sym=sym.upper().strip()
+    ud=_user_data()
     if request.method=='DELETE':
-        APP_DATA.setdefault('watchlist',{}).pop(sym,None)
-        _save_data(APP_DATA)
-        return jsonify({'ok':True})
+        ud.setdefault('watchlist',{}).pop(sym,None)
+        _save_user_data(ud); return jsonify({'ok':True})
     body=request.get_json(silent=True) or {}
-    APP_DATA.setdefault('watchlist',{})[sym]={
-        'sym':sym,
-        'name':body.get('name',sym),
-        'price':body.get('price'),
-        'sector':body.get('sector',''),
+    ud.setdefault('watchlist',{})[sym]={
+        'sym':sym,'name':body.get('name',sym),
+        'price':body.get('price'),'sector':body.get('sector',''),
         'added':datetime.date.today().isoformat(),
     }
-    _save_data(APP_DATA)
-    return jsonify({'ok':True})
+    _save_user_data(ud); return jsonify({'ok':True})
 
 @app.route('/api/notes/<sym>',methods=['GET','POST'])
 def api_notes(sym):
-    sym=sym.upper().strip()
+    sym=sym.upper().strip(); ud=_user_data()
     if request.method=='GET':
-        return jsonify(APP_DATA.get('notes',{}).get(sym,{'note':'','trades':[]}))
+        return jsonify(ud.get('notes',{}).get(sym,{'note':'','trades':[]}))
     body=request.get_json(silent=True) or {}
-    APP_DATA.setdefault('notes',{})[sym]=body
-    _save_data(APP_DATA)
-    return jsonify({'ok':True})
+    ud.setdefault('notes',{})[sym]=body
+    _save_user_data(ud); return jsonify({'ok':True})
 
 # ── Trade Log routes ──────────────────────────────────────────────────────────
 @app.route('/api/trades')
 def api_trades_all():
-    """All trades across all stocks — for Trade Log home tab"""
-    all_trades=APP_DATA.get('trades',{})
+    all_trades=_user_data().get('trades',{})
     flat=[]
     for sym,trades in all_trades.items():
-        for t in trades:
-            flat.append({**t,'sym':sym})
+        for t in trades: flat.append({**t,'sym':sym})
     flat.sort(key=lambda x:x.get('logged',''),reverse=True)
     return jsonify(flat)
 
 @app.route('/api/trades/<sym>',methods=['GET'])
 def api_trades_get(sym):
-    return jsonify(APP_DATA.get('trades',{}).get(sym.upper(),[]))
+    return jsonify(_user_data().get('trades',{}).get(sym.upper(),[]))
 
 @app.route('/api/trades/<sym>',methods=['POST'])
 def api_trades_add(sym):
-    sym=sym.upper(); data=request.get_json(silent=True) or {}
-    trades=APP_DATA.setdefault('trades',{}).setdefault(sym,[])
-    data['logged']=datetime.date.today().isoformat()
-    trades.insert(0,data); _save_data(APP_DATA)
+    sym=sym.upper(); ud=_user_data()
+    data=request.get_json(silent=True) or {}
+    trades=ud.setdefault('trades',{}).setdefault(sym,[])
+    data['logged']=datetime.datetime.now().isoformat()
+    trades.insert(0,data); _save_user_data(ud)
     return jsonify({'ok':True,'count':len(trades)})
 
 @app.route('/api/trades/<sym>/<int:idx>',methods=['DELETE'])
 def api_trades_del(sym,idx):
-    sym=sym.upper(); trades=APP_DATA.get('trades',{}).get(sym,[])
+    sym=sym.upper(); ud=_user_data()
+    trades=ud.get('trades',{}).get(sym,[])
     if 0<=idx<len(trades):
         trades.pop(idx)
-        if not trades: APP_DATA.get('trades',{}).pop(sym,None)
-        _save_data(APP_DATA); return jsonify({'ok':True})
+        if not trades: ud.get('trades',{}).pop(sym,None)
+        _save_user_data(ud); return jsonify({'ok':True})
     return jsonify({'error':'not found'}),404
+
+# ── User data sync API ────────────────────────────────────────────────────────
+@app.route('/api/userdata', methods=['GET'])
+def api_userdata_get():
+    """Get all user data for sync"""
+    return jsonify(_user_data())
+
+@app.route('/api/userdata', methods=['POST'])
+def api_userdata_set():
+    """Save all user data (full replace — for sync from browser)"""
+    body = request.get_json(silent=True) or {}
+    if body:
+        _save_user_data(body)
+    return jsonify({'ok': True})
 
 # ── Sparkline for watchlist ───────────────────────────────────────────────────
 @app.route('/api/sparkline/<sym>')

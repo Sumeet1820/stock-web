@@ -13,15 +13,135 @@ let rpIndicesLoaded = false;
 let ipoAllData    = [];
 let heatmapHistory = [];  // for index heatmap back navigation
 
+// ── User ID — identifies this user across devices ──
+let _userId = localStorage.getItem('user_id_v1') || '';
+
+function getUserId() { return _userId; }
+
+function setUserId(id) {
+  _userId = id.trim();
+  localStorage.setItem('user_id_v1', _userId);
+}
+
+// Add user ID to all fetch calls automatically
+const _origFetch = window.fetch;
+window.fetch = function(url, opts = {}) {
+  const uid = getUserId();
+  if (uid && typeof url === 'string' && url.startsWith('/api/')) {
+    opts.headers = { ...(opts.headers || {}), 'X-User-ID': uid };
+  }
+  return _origFetch(url, opts);
+};
+
 // ── Init ───────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  updateClock();
-  setInterval(updateClock, 60000);
-  loadIndices();
-  // Wrap in try-catch so any error doesn't block page
-  try { switchHomeTab('tradelog'); } catch(e) { console.error('switchHomeTab error:', e); }
-  try { loadRpIndices(); } catch(e) { console.error('loadRpIndices error:', e); }
+  // Setup User ID first — then load everything
+  setupUserId(() => {
+    updateClock();
+    setInterval(updateClock, 60000);
+    loadIndices();
+    migrateServerDataToLocal();
+    try { switchHomeTab('tradelog'); } catch(e) { console.error('switchHomeTab error:', e); }
+    try { loadRpIndices(); } catch(e) { console.error('loadRpIndices error:', e); }
+  });
 });
+
+// ── User ID Setup ──────────────────────────────
+function setupUserId(callback) {
+  const uid = getUserId();
+  if (uid && uid.length >= 2) {
+    // Already set — show in UI and continue
+    showUserBadge(uid);
+    callback();
+    return;
+  }
+  // First time — show modal to set name
+  showUserSetupModal(callback);
+}
+
+function showUserSetupModal(callback) {
+  const modal = document.createElement('div');
+  modal.id = 'user-setup-modal';
+  modal.style.cssText = `
+    position:fixed;inset:0;z-index:9999;
+    background:rgba(6,9,18,0.95);
+    display:flex;align-items:center;justify-content:center;
+  `;
+  modal.innerHTML = `
+    <div style="background:#11162C;border:1px solid #1C2240;border-radius:16px;padding:32px;max-width:380px;width:90%;text-align:center">
+      <div style="font-size:40px;margin-bottom:12px">📊</div>
+      <div style="font-size:20px;font-weight:800;color:#F0F4FF;margin-bottom:8px">Stock Analyzer Pro</div>
+      <div style="font-size:13px;color:#8B92B8;margin-bottom:24px">
+        Apna naam ya ID set karo.<br>
+        Isse tera data kisi bhi device pe sync hoga.
+      </div>
+      <input id="uid-input" type="text" placeholder="e.g. sumeet, rahul123"
+        style="width:100%;background:#0C1121;border:1px solid #1C2240;color:#F0F4FF;
+               padding:12px 16px;border-radius:8px;font-size:15px;outline:none;
+               text-align:center;margin-bottom:16px"
+        maxlength="30" autocomplete="off" spellcheck="false">
+      <div style="font-size:11px;color:#555;margin-bottom:20px">
+        ⚠️ Yeh ID private rakho — isse tera data access hoga
+      </div>
+      <button id="uid-btn"
+        style="width:100%;background:#4D8EFF;border:none;color:white;
+               padding:12px;border-radius:8px;font-size:15px;font-weight:700;
+               cursor:pointer">
+        ✅ Start karo
+      </button>
+    </div>`;
+  document.body.appendChild(modal);
+
+  const input = modal.querySelector('#uid-input');
+  const btn   = modal.querySelector('#uid-btn');
+  input.focus();
+
+  const proceed = () => {
+    const val = input.value.trim().replace(/[^a-zA-Z0-9_\-]/g, '');
+    if (val.length < 2) {
+      input.style.borderColor = '#FF3D5C';
+      input.placeholder = 'Kam se kam 2 characters chahiye!';
+      return;
+    }
+    setUserId(val);
+    modal.remove();
+    showUserBadge(val);
+    callback();
+  };
+
+  btn.onclick = proceed;
+  input.onkeydown = e => { if (e.key === 'Enter') proceed(); };
+}
+
+function showUserBadge(uid) {
+  // Show user ID in topbar
+  const topbar = document.querySelector('.topbar-right');
+  if (!topbar) return;
+  let badge = document.getElementById('user-badge');
+  if (!badge) {
+    badge = document.createElement('div');
+    badge.id = 'user-badge';
+    badge.style.cssText = 'font-size:11px;color:#8B92B8;cursor:pointer;padding:4px 8px;border-radius:4px;border:1px solid #1C2240;margin-right:8px';
+    badge.title = 'Click to change user ID';
+    badge.onclick = () => {
+      const newId = prompt('Naya User ID:', getUserId());
+      if (newId && newId.trim().length >= 2) {
+        setUserId(newId.trim().replace(/[^a-zA-Z0-9_\-]/g, ''));
+        showUserBadge(getUserId());
+        showToast('✅ User ID updated! Page reload ho raha hai...');
+        setTimeout(() => location.reload(), 1500);
+      }
+    };
+    topbar.insertBefore(badge, topbar.firstChild);
+  }
+  badge.textContent = `👤 ${uid}`;
+}
+
+// ── One-time migration from server → localStorage ──
+async function migrateServerDataToLocal() {
+  // Load fresh data from server on every startup (for cross-device sync)
+  await loadFromServer();
+}
 
 // ── Clock ──────────────────────────────────────
 function updateClock() {
@@ -667,178 +787,210 @@ async function renderTechnical() {
 }
 
 // ── Notes Render ───────────────────────────────
-async function renderNotes() {
+// ══════════════════════════════════════════════
+// LOCAL STORAGE HELPERS — Private data (watchlist, trades, notes)
+// Data server pe User ID ke saath save hota hai.
+// localStorage sirf cache ke liye — fast load ke liye.
+// ══════════════════════════════════════════════
+
+function lsGet(key, def) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : def; }
+  catch { return def; }
+}
+function lsSet(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+}
+
+// Cache key includes user ID so different users on same browser get different data
+function _cacheKey(k) { return `${k}_${getUserId()}`; }
+
+// Watchlist: { SYM: {sym, name, price, sector, added} }
+function wlGetAll()          { return lsGet(_cacheKey('wl_v1'), {}); }
+function wlSave(wl)          { lsSet(_cacheKey('wl_v1'), wl); _syncToServer(); }
+function wlAdd(sym, info)    { const wl = wlGetAll(); wl[sym] = {...info, sym, added: new Date().toLocaleDateString('en-IN')}; wlSave(wl); }
+function wlRemove(sym)       { const wl = wlGetAll(); delete wl[sym]; wlSave(wl); }
+function wlHas(sym)          { return !!wlGetAll()[sym]; }
+
+// Trades: { SYM: [{type,price,qty,date,logged}, ...] }
+function tradesGetAll()      { return lsGet(_cacheKey('trades_v1'), {}); }
+function tradesGet(sym)      { return (tradesGetAll()[sym] || []); }
+function tradesAdd(sym, t)   { const all = tradesGetAll(); all[sym] = [t, ...(all[sym]||[])]; lsSet(_cacheKey('trades_v1'), all); _syncToServer(); }
+function tradesDel(sym, idx) { const all = tradesGetAll(); if(all[sym]) { all[sym].splice(idx,1); if(!all[sym].length) delete all[sym]; lsSet(_cacheKey('trades_v1'), all); _syncToServer(); } }
+function tradesFlat()        { const all = tradesGetAll(); const flat=[]; for(const [sym,ts] of Object.entries(all)) ts.forEach(t=>flat.push({...t,sym})); return flat.sort((a,b)=>(b.logged||'').localeCompare(a.logged||'')); }
+
+// Notes: { SYM: "note text" }
+function notesGet(sym)       { return lsGet(_cacheKey('notes_v1'), {})[sym] || ''; }
+function notesSave(sym, txt) { const n = lsGet(_cacheKey('notes_v1'), {}); n[sym] = txt; lsSet(_cacheKey('notes_v1'), n); _syncToServer(); }
+
+// ── Sync to server (debounced) ─────────────────
+let _syncTimer = null;
+function _syncToServer() {
+  clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(async () => {
+    try {
+      const data = {
+        watchlist: wlGetAll(),
+        trades:    tradesGetAll(),
+        notes:     lsGet(_cacheKey('notes_v1'), {}),
+      };
+      await fetch('/api/userdata', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+    } catch(e) { console.log('Sync failed (offline?):', e.message); }
+  }, 800);
+}
+
+// ── Load from server on startup ────────────────
+async function loadFromServer() {
+  try {
+    const res  = await fetch('/api/userdata');
+    const data = await res.json();
+    if (data && typeof data === 'object') {
+      if (data.watchlist && Object.keys(data.watchlist).length > 0)
+        lsSet(_cacheKey('wl_v1'), data.watchlist);
+      if (data.trades && Object.keys(data.trades).length > 0)
+        lsSet(_cacheKey('trades_v1'), data.trades);
+      if (data.notes && Object.keys(data.notes).length > 0)
+        lsSet(_cacheKey('notes_v1'), data.notes);
+      console.log('[sync] Data loaded from server ✅');
+    }
+  } catch(e) { console.log('[sync] Server load failed (using local cache):', e.message); }
+}
+
+// ── Notes Tab ──────────────────────────────────
+function renderNotes() {
   const sym = currentSym;
   if (!sym) return;
 
-  document.getElementById('atab-content').innerHTML = '<div class="loading-box">⏳ Loading notes...</div>';
+  const note   = notesGet(sym);
+  const trades = tradesGet(sym);
 
-  try {
-    const [notesRes, tradesRes] = await Promise.all([
-      fetch(`/api/notes/${sym}`),
-      fetch(`/api/trades/${sym}`)
-    ]);
-    const notesData = await notesRes.json();
-    const trades    = await tradesRes.json();
-    const note = notesData.note || '';
+  let html = `<div class="notes-area">
+    <div class="section-hdr" style="margin-top:0">📝 My Notes — ${escHTML(sym)}</div>
+    <textarea id="note-text" placeholder="Yahan notes likhho...">${escHTML(note)}</textarea>
+    <button class="save-btn" onclick="saveNote()">💾 Save Note</button>
+  </div>
 
-    let html = `<div class="notes-area">
-      <div class="section-hdr" style="margin-top:0">📝 My Notes — ${escHTML(sym)}</div>
-      <textarea id="note-text" placeholder="Yahan notes likhho...">${escHTML(note)}</textarea>
-      <button class="save-btn" onclick="saveNote()">💾 Save Note</button>
+  <div class="trade-form">
+    <div class="section-hdr" style="margin-top:0">💼 Trade Tracker</div>
+    <div class="trade-row">
+      <input type="date" id="trade-date" value="${new Date().toISOString().split('T')[0]}">
+      <select id="trade-type">
+        <option value="BUY">BUY</option>
+        <option value="SELL">SELL</option>
+      </select>
+      <input type="number" id="trade-qty"   placeholder="Qty" min="1">
+      <input type="number" id="trade-price" placeholder="Price" step="0.01">
+      <button class="add-btn" onclick="addTrade()">+ Add Trade</button>
     </div>
+  </div>`;
 
-    <div class="trade-form">
-      <div class="section-hdr" style="margin-top:0">💼 Trade Tracker</div>
-      <div class="trade-row">
-        <input type="date" id="trade-date" value="${new Date().toISOString().split('T')[0]}">
-        <select id="trade-type">
-          <option value="BUY">BUY</option>
-          <option value="SELL">SELL</option>
-        </select>
-        <input type="number" id="trade-qty"   placeholder="Qty" min="1">
-        <input type="number" id="trade-price" placeholder="Price" step="0.01">
-        <button class="add-btn" onclick="addTrade()">+ Add Trade</button>
-      </div>
-    </div>`;
-
-    if (trades && trades.length > 0) {
-      html += `<div class="section-hdr">📊 Trade History</div>
-      <table class="wl-table">
-        <thead><tr>
-          <th>Date</th><th>Type</th><th>Qty</th><th>Price</th><th></th>
-        </tr></thead>
-        <tbody>
-          ${trades.map((t, i) => `<tr>
-            <td>${escHTML(t.date || t.logged || '—')}</td>
-            <td style="color:${t.type === 'BUY' ? 'var(--green)' : 'var(--red)'};font-weight:700">${t.type}</td>
-            <td>${t.qty}</td>
-            <td>₹${t.price}</td>
-            <td><button class="del-btn" onclick="deleteTrade(${i})">✕</button></td>
-          </tr>`).join('')}
-        </tbody>
-      </table>`;
-    }
-
-    document.getElementById('atab-content').innerHTML = html;
-  } catch(e) {
-    document.getElementById('atab-content').innerHTML = `<div class="loading-box" style="color:var(--red)">❌ Error: ${escHTML(e.message)}</div>`;
+  if (trades.length > 0) {
+    html += `<div class="section-hdr">📊 Trade History</div>
+    <table class="wl-table">
+      <thead><tr><th>Date</th><th>Type</th><th>Qty</th><th>Price</th><th></th></tr></thead>
+      <tbody>
+        ${trades.map((t, i) => `<tr>
+          <td>${escHTML(t.date || t.logged || '—')}</td>
+          <td style="color:${t.type==='BUY'?'var(--green)':'var(--red)'};font-weight:700">${t.type}</td>
+          <td>${t.qty}</td>
+          <td>₹${t.price}</td>
+          <td><button class="del-btn" onclick="deleteTrade(${i})">✕</button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
   }
+
+  document.getElementById('atab-content').innerHTML = html;
 }
 
-async function saveNote() {
+function saveNote() {
   const sym  = currentSym;
   const note = document.getElementById('note-text').value;
-  try {
-    const res = await fetch(`/api/notes/${sym}`);
-    const existing = await res.json();
-    await fetch(`/api/notes/${sym}`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({...existing, note})
-    });
-    showToast('✅ Note saved!');
-  } catch(e) { showToast('❌ Save failed', true); }
+  notesSave(sym, note);
+  showToast('✅ Note saved!');
 }
 
-async function addTrade() {
+function addTrade() {
   const sym   = currentSym;
   const date  = document.getElementById('trade-date').value;
   const type  = document.getElementById('trade-type').value;
   const qty   = document.getElementById('trade-qty').value;
   const price = document.getElementById('trade-price').value;
   if (!qty || !price) { showToast('⚠️ Qty aur Price fill karo', true); return; }
-
-  try {
-    await fetch(`/api/trades/${sym}`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({date, type, qty: parseInt(qty), price: parseFloat(price)})
-    });
-    showToast('✅ Trade added!');
-    renderNotes();
-  } catch(e) { showToast('❌ Add failed', true); }
+  tradesAdd(sym, {
+    date, type,
+    qty:    parseInt(qty),
+    price:  parseFloat(price),
+    logged: new Date().toISOString()
+  });
+  showToast('✅ Trade added!');
+  renderNotes();
 }
 
-async function deleteTrade(idx) {
-  const sym = currentSym;
-  try {
-    await fetch(`/api/trades/${sym}/${idx}`, {method:'DELETE'});
-    renderNotes();
-  } catch(e) { showToast('Delete failed', true); }
+function deleteTrade(idx) {
+  tradesDel(currentSym, idx);
+  renderNotes();
 }
 
 // ── Watchlist ──────────────────────────────────
-async function checkWatchlistStatus(sym, btn) {
-  try {
-    const res = await fetch('/api/watchlist');
-    const wl  = await res.json();
-    if (wl[sym]) { btn.textContent = '★ Saved'; btn.classList.add('saved'); }
-    else { btn.textContent = '⭐ Watchlist'; btn.classList.remove('saved'); }
-  } catch {}
+function checkWatchlistStatus(sym, btn) {
+  if (wlHas(sym)) { btn.textContent = '★ Saved'; btn.classList.add('saved'); }
+  else            { btn.textContent = '⭐ Watchlist'; btn.classList.remove('saved'); }
 }
 
-async function toggleWatchlist() {
+function toggleWatchlist() {
   const sym  = currentSym;
   const data = currentData;
   if (!sym) return;
-
-  const res = await fetch('/api/watchlist');
-  const wl  = await res.json();
   const btn = document.getElementById('wl-btn');
-
-  if (wl[sym]) {
-    await fetch(`/api/watchlist/${sym}`, {method: 'DELETE'});
+  if (wlHas(sym)) {
+    wlRemove(sym);
     btn.textContent = '⭐ Watchlist'; btn.classList.remove('saved');
     showToast('Watchlist se remove kiya');
   } else {
-    await fetch(`/api/watchlist/${sym}`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({name: data?.name || sym, price: data?.current_price, sector: data?.sector || ''})
-    });
+    wlAdd(sym, {name: data?.name||sym, price: data?.current_price, sector: data?.sector||''});
     btn.textContent = '★ Saved'; btn.classList.add('saved');
     showToast('⭐ Watchlist mein add kiya!');
   }
+  // Update sidebar count
+  const cnt = document.getElementById('wl-count');
+  if (cnt) cnt.textContent = Object.keys(wlGetAll()).length;
 }
 
 async function loadWatchlist() {
   const cont = document.getElementById('watchlist-content');
   cont.innerHTML = '<div class="loading-box">⏳ Loading...</div>';
-  try {
-    const res = await fetch('/api/watchlist');
-    const wl  = await res.json();
-    const items = Object.values(wl);
-    if (!items.length) {
-      cont.innerHTML = '<div class="loading-box">⭐ Watchlist empty hai — stocks add karo analysis se</div>';
-      return;
-    }
-    cont.innerHTML = `<div class="wl-table-wrap">
-      <table class="wl-table">
-        <thead><tr>
-          <th>Symbol</th><th>Company</th><th>Sector</th><th>Added</th><th>Entry ₹</th><th>Live ₹</th><th>Chg%</th><th>Sparkline</th><th></th>
-        </tr></thead>
-        <tbody id="wl-tbody">
-          ${items.map(item => `<tr id="wl-row-${item.sym}">
-            <td class="wl-sym" onclick="quickLoad('${escHTML(item.sym)}')">${escHTML(item.sym)}</td>
-            <td style="font-size:12px">${escHTML(item.name || '-')}</td>
-            <td style="color:var(--subtext);font-size:11px">${escHTML(item.sector || '-')}</td>
-            <td style="color:var(--subtext);font-size:12px">${escHTML(item.added || '-')}</td>
-            <td>₹${item.price || '-'}</td>
-            <td id="wl-live-${item.sym}" style="color:var(--subtext)">...</td>
-            <td id="wl-pnl-${item.sym}" style="color:var(--subtext)">...</td>
-            <td><canvas id="wl-spark-${item.sym}" class="wl-spark"></canvas></td>
-            <td><button class="del-btn" onclick="removeWatchlist('${escHTML(item.sym)}')">✕</button></td>
-          </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>`;
-
-    // Fetch live prices
-    items.forEach(item => fetchWlLive(item));
-  } catch(e) {
-    cont.innerHTML = `<div class="loading-box" style="color:var(--red)">❌ Error: ${escHTML(e.message)}</div>`;
+  const wl    = wlGetAll();
+  const items = Object.values(wl);
+  if (!items.length) {
+    cont.innerHTML = '<div class="loading-box">⭐ Watchlist empty hai — stocks add karo analysis se</div>';
+    return;
   }
+  cont.innerHTML = `<div class="wl-table-wrap">
+    <table class="wl-table">
+      <thead><tr>
+        <th>Symbol</th><th>Company</th><th>Sector</th><th>Added</th>
+        <th>Entry ₹</th><th>Live ₹</th><th>Chg%</th><th>Sparkline</th><th></th>
+      </tr></thead>
+      <tbody>
+        ${items.map(item => `<tr>
+          <td class="wl-sym" onclick="quickLoad('${escHTML(item.sym)}')">${escHTML(item.sym)}</td>
+          <td style="font-size:12px">${escHTML(item.name||'-')}</td>
+          <td style="color:var(--subtext);font-size:11px">${escHTML(item.sector||'-')}</td>
+          <td style="color:var(--subtext);font-size:12px">${escHTML(item.added||'-')}</td>
+          <td>₹${item.price||'-'}</td>
+          <td id="wl-live-${item.sym}" style="color:var(--subtext)">...</td>
+          <td id="wl-pnl-${item.sym}"  style="color:var(--subtext)">...</td>
+          <td><canvas id="wl-spark-${item.sym}" class="wl-spark"></canvas></td>
+          <td><button class="del-btn" onclick="removeWatchlist('${escHTML(item.sym)}')">✕</button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
+  items.forEach(item => fetchWlLive(item));
 }
 
 async function fetchWlLive(item) {
@@ -846,15 +998,12 @@ async function fetchWlLive(item) {
     const res = await fetch(`/api/live/${item.sym}`);
     const nse = await res.json();
     const liveEl = document.getElementById('wl-live-' + item.sym);
-    const pnlEl  = document.getElementById('wl-pnl-' + item.sym);
+    const pnlEl  = document.getElementById('wl-pnl-'  + item.sym);
     if (!liveEl) return;
-
-    const ltp = nse.ltp;
-    const chg = nse.change_pct;
+    const ltp = nse.ltp, chg = nse.change_pct;
     if (ltp) {
       liveEl.textContent = `₹${fmtNum(ltp)}`;
-      liveEl.style.color = (chg || 0) >= 0 ? 'var(--green)' : 'var(--red)';
-
+      liveEl.style.color = (chg||0) >= 0 ? 'var(--green)' : 'var(--red)';
       if (item.price && pnlEl) {
         const pnl = ((ltp - item.price) / item.price * 100).toFixed(2);
         pnlEl.textContent = `${pnl >= 0 ? '+' : ''}${pnl}%`;
@@ -862,8 +1011,6 @@ async function fetchWlLive(item) {
       }
     }
   } catch {}
-
-  // Sparkline
   try {
     const res2 = await fetch(`/api/sparkline/${item.sym}`);
     const prices = await res2.json();
@@ -878,27 +1025,148 @@ function drawSparkline(canvas, prices) {
   const ctx = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0, 0, w, h);
-  const mn = Math.min(...prices), mx = Math.max(...prices);
-  const rng = mx - mn || 1;
+  const mn = Math.min(...prices), mx = Math.max(...prices), rng = mx - mn || 1;
   const col = prices[prices.length-1] >= prices[0] ? '#00E6A8' : '#FF3D5C';
-  ctx.strokeStyle = col;
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
+  ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.beginPath();
   prices.forEach((p, i) => {
-    const x = (i / (prices.length - 1)) * w;
+    const x = (i / (prices.length-1)) * w;
     const y = h - ((p - mn) / rng) * (h - 4) - 2;
     i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
   });
   ctx.stroke();
 }
 
-async function removeWatchlist(sym) {
-  await fetch(`/api/watchlist/${sym}`, {method: 'DELETE'});
+function removeWatchlist(sym) {
+  wlRemove(sym);
   loadWatchlist();
   showToast('Watchlist se hataya');
 }
 
 function refreshWatchlist() { loadWatchlist(); }
+
+// ── Trade Log (Home Tab) ───────────────────────
+function renderTradeLog() {
+  const cont = document.getElementById('home-tab-content');
+  if (!cont) return;
+  const trades = tradesFlat();
+
+  if (!trades.length) {
+    cont.innerHTML = `<div class="trade-log-empty">
+      <div class="tl-icon">📒</div>
+      <div class="tl-title">Abhi koi trade log nahi</div>
+      <div>Kisi bhi stock analyze karo → Notes tab → trade add karo</div>
+    </div>`;
+    return;
+  }
+
+  cont.innerHTML = `
+    <div style="overflow-x:auto">
+      <table class="trade-log-table">
+        <thead><tr>
+          <th>Symbol</th><th>Type</th><th>Buy Price</th><th>Qty</th>
+          <th>Total Value</th><th>Date</th>
+          <th>Live Price</th><th>P&amp;L (₹)</th><th>Gain %</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${trades.map((t, i) => {
+            const tc  = t.type === 'BUY' ? 'var(--green)' : 'var(--red)';
+            const pr  = parseFloat(t.price) || 0;
+            const qty = parseFloat(t.qty)   || 0;
+            const tv  = pr * qty;
+            return `<tr>
+              <td class="wl-sym" onclick="quickLoad('${escHTML(t.sym)}')">${escHTML(t.sym)}</td>
+              <td style="color:${tc};font-weight:700">${escHTML(t.type)}</td>
+              <td>₹${pr > 0 ? fmtNum(pr) : '—'}</td>
+              <td>${qty > 0 ? qty : '—'}</td>
+              <td style="color:var(--accent);font-weight:600">${tv > 0 ? '₹'+fmtNum(tv) : '—'}</td>
+              <td style="color:var(--subtext);font-size:12px">${escHTML(t.date||t.logged||'—')}</td>
+              <td id="tl-ltp-${i}" style="color:var(--subtext)">...</td>
+              <td id="tl-pnl-${i}" style="font-weight:700">...</td>
+              <td id="tl-pct-${i}" style="font-weight:700">...</td>
+              <td><button class="del-btn" onclick="deleteTl(${i},'${escHTML(t.sym)}')">✕</button></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div style="padding:10px 12px;color:var(--subtext);font-size:12px;background:var(--card2);border-radius:0 0 8px 8px;display:flex;gap:20px;flex-wrap:wrap">
+      <span>Total: <b style="color:var(--text)">${trades.length} trades</b></span>
+      <span>BUY: <b style="color:var(--green)">${trades.filter(t=>t.type==='BUY').length}</b></span>
+      <span>SELL: <b style="color:var(--red)">${trades.filter(t=>t.type==='SELL').length}</b></span>
+      <span>Invested: <b style="color:var(--accent)">₹${fmtNum(trades.filter(t=>t.type==='BUY').reduce((s,t)=>s+(parseFloat(t.price)||0)*(parseFloat(t.qty)||0),0))}</b></span>
+    </div>`;
+
+  trades.forEach((t, i) => fetchTlPnl(t, i));
+}
+
+function deleteTl(idx, sym) {
+  // idx is index in flat array — find actual index in sym's array
+  const symTrades = tradesGet(sym);
+  const flat = tradesFlat();
+  const trade = flat[idx];
+  if (!trade) return;
+  // Find position in sym's array
+  const symIdx = symTrades.findIndex(t =>
+    t.logged === trade.logged && t.price === trade.price && t.type === trade.type
+  );
+  if (symIdx >= 0) tradesDel(sym, symIdx);
+  renderTradeLog();
+  showToast('Trade deleted');
+}
+
+async function fetchTlPnl(trade, idx) {
+  const ltpEl = document.getElementById('tl-ltp-' + idx);
+  const pnlEl = document.getElementById('tl-pnl-' + idx);
+  const pctEl = document.getElementById('tl-pct-' + idx);
+  if (!pnlEl) return;
+
+  try {
+    // Try NSE live first, fallback to /api/price
+    let ltp = 0;
+    try {
+      const r1 = await fetch(`/api/live/${trade.sym}`);
+      const d1 = await r1.json();
+      ltp = parseFloat(d1.ltp) || 0;
+    } catch {}
+
+    // Fallback: yfinance price
+    if (!ltp) {
+      try {
+        const r2 = await fetch(`/api/price/${trade.sym}`);
+        const d2 = await r2.json();
+        ltp = parseFloat(d2.price) || 0;
+      } catch {}
+    }
+
+    if (ltp > 0 && trade.price) {
+      const buyPrice = parseFloat(trade.price) || 0;
+      const qty      = parseFloat(trade.qty)   || 1;
+      const sign     = trade.type === 'SELL' ? -1 : 1;
+
+      if (ltpEl) {
+        ltpEl.textContent = '₹' + fmtNum(ltp);
+        ltpEl.style.color = ltp >= buyPrice ? 'var(--green)' : 'var(--red)';
+      }
+      const pnl = (ltp - buyPrice) * qty * sign;
+      pnlEl.textContent = `${pnl >= 0 ? '+' : ''}₹${fmtNum(Math.abs(pnl))}`;
+      pnlEl.style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+
+      if (pctEl && buyPrice > 0) {
+        const gainPct = ((ltp - buyPrice) / buyPrice) * 100 * sign;
+        pctEl.textContent = `${gainPct >= 0 ? '+' : ''}${gainPct.toFixed(2)}%`;
+        pctEl.style.color = gainPct >= 0 ? 'var(--green)' : 'var(--red)';
+      }
+    } else {
+      if (ltpEl) { ltpEl.textContent = '—'; ltpEl.style.color = 'var(--subtext)'; }
+      pnlEl.textContent = '—'; pnlEl.style.color = 'var(--subtext)';
+      if (pctEl) { pctEl.textContent = '—'; pctEl.style.color = 'var(--subtext)'; }
+    }
+  } catch {
+    if (ltpEl) ltpEl.textContent = '—';
+    pnlEl.textContent = '—';
+    if (pctEl) pctEl.textContent = '—';
+  }
+}
 
 // ── Market ─────────────────────────────────────
 async function loadMarket(type, btn) {
@@ -1260,138 +1528,6 @@ function switchHomeTab(tab, btn) {
   }
   if (tab === 'tradelog') renderTradeLog();
   else loadHeatmap(tab);
-}
-
-// ══════════════════════════════════════════════
-// TRADE LOG
-// ══════════════════════════════════════════════
-async function renderTradeLog() {
-  const cont = document.getElementById('home-tab-content');
-  if (!cont) return;
-  cont.innerHTML = '<div class="loading-box">⏳ Trade log load ho rahi hai...</div>';
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    const res    = await fetch('/api/trades', { signal: controller.signal });
-    clearTimeout(timeout);
-    const trades = await res.json();
-
-    if (!trades || trades.error || !trades.length) {
-      cont.innerHTML = `<div class="trade-log-empty">
-        <div class="tl-icon">📒</div>
-        <div class="tl-title">Abhi koi trade log nahi</div>
-        <div>Kisi bhi stock analyze karo → Notes tab → trade add karo</div>
-      </div>`;
-      return;
-    }
-
-    cont.innerHTML = `
-      <div style="overflow-x:auto">
-        <table class="trade-log-table">
-          <thead><tr>
-            <th>Symbol</th>
-            <th>Type</th>
-            <th>Buy Price</th>
-            <th>Qty</th>
-            <th>Total Value</th>
-            <th>Date</th>
-            <th>Live Price</th>
-            <th>P&amp;L (₹)</th>
-            <th>Gain %</th>
-            <th></th>
-          </tr></thead>
-          <tbody id="trade-log-tbody">
-            ${trades.map((t, i) => {
-              const tc       = t.type === 'BUY' ? 'var(--green)' : 'var(--red)';
-              const price    = parseFloat(t.price) || 0;
-              const qty      = parseFloat(t.qty)   || 0;
-              const totalVal = price * qty;
-              const totalStr = totalVal > 0 ? '₹' + fmtNum(totalVal) : '—';
-              return `<tr>
-                <td class="wl-sym" onclick="quickLoad('${escHTML(t.sym)}')">${escHTML(t.sym)}</td>
-                <td style="color:${tc};font-weight:700">${escHTML(t.type)}</td>
-                <td>₹${price > 0 ? fmtNum(price) : '—'}</td>
-                <td>${qty > 0 ? qty : '—'}</td>
-                <td style="color:var(--accent);font-weight:600">${totalStr}</td>
-                <td style="color:var(--subtext);font-size:12px">${escHTML(t.date || t.logged || '—')}</td>
-                <td id="tl-ltp-${i}" style="color:var(--subtext)">...</td>
-                <td id="tl-pnl-${i}" style="font-weight:700">...</td>
-                <td id="tl-pct-${i}" style="font-weight:700">...</td>
-                <td><button class="del-btn" onclick="deleteTl(${i},'${escHTML(t.sym)}')">✕</button></td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>
-      <div style="padding:10px 12px;color:var(--subtext);font-size:12px;background:var(--card2);border-radius:0 0 8px 8px;display:flex;gap:20px;flex-wrap:wrap">
-        <span>Total: <b style="color:var(--text)">${trades.length} trades</b></span>
-        <span>BUY: <b style="color:var(--green)">${trades.filter(t=>t.type==='BUY').length}</b></span>
-        <span>SELL: <b style="color:var(--red)">${trades.filter(t=>t.type==='SELL').length}</b></span>
-        <span>Invested: <b style="color:var(--accent)">₹${fmtNum(trades.filter(t=>t.type==='BUY').reduce((s,t)=>(s + (parseFloat(t.price)||0)*(parseFloat(t.qty)||0)),0))}</b></span>
-      </div>`;
-
-    // Fetch live price + compute P&L and Gain% for each trade
-    trades.forEach((t, i) => fetchTlPnl(t, i));
-  } catch(e) {
-    cont.innerHTML = `<div class="trade-log-empty">
-      <div class="tl-icon">📒</div>
-      <div class="tl-title">Abhi koi trade log nahi</div>
-      <div>Kisi bhi stock analyze karo → Notes tab → trade add karo</div>
-    </div>`;
-  }
-}
-
-async function fetchTlPnl(trade, idx) {
-  try {
-    const res = await fetch(`/api/live/${trade.sym}`);
-    const nse = await res.json();
-    const ltp = parseFloat(nse.ltp) || 0;
-
-    const ltpEl = document.getElementById('tl-ltp-' + idx);
-    const pnlEl = document.getElementById('tl-pnl-' + idx);
-    const pctEl = document.getElementById('tl-pct-' + idx);
-    if (!pnlEl) return;
-
-    if (ltp > 0 && trade.price) {
-      const buyPrice = parseFloat(trade.price) || 0;
-      const qty      = parseFloat(trade.qty)   || 1;
-      const sign     = trade.type === 'SELL' ? -1 : 1;
-
-      // Live Price
-      if (ltpEl) {
-        ltpEl.textContent = '₹' + fmtNum(ltp);
-        ltpEl.style.color = ltp >= buyPrice ? 'var(--green)' : 'var(--red)';
-      }
-
-      // P&L in ₹ = (LTP - BuyPrice) × Qty
-      const pnl    = (ltp - buyPrice) * qty * sign;
-      const pnlCol = pnl >= 0 ? 'var(--green)' : 'var(--red)';
-      pnlEl.textContent = `${pnl >= 0 ? '+' : ''}₹${fmtNum(Math.abs(pnl))}`;
-      pnlEl.style.color = pnlCol;
-
-      // Gain % = (LTP - BuyPrice) / BuyPrice × 100
-      if (pctEl && buyPrice > 0) {
-        const gainPct = ((ltp - buyPrice) / buyPrice) * 100 * sign;
-        pctEl.textContent = `${gainPct >= 0 ? '+' : ''}${gainPct.toFixed(2)}%`;
-        pctEl.style.color = gainPct >= 0 ? 'var(--green)' : 'var(--red)';
-      }
-    } else {
-      if (ltpEl) { ltpEl.textContent = '—'; ltpEl.style.color = 'var(--subtext)'; }
-      pnlEl.textContent = '—'; pnlEl.style.color = 'var(--subtext)';
-      if (pctEl) { pctEl.textContent = '—'; pctEl.style.color = 'var(--subtext)'; }
-    }
-  } catch {
-    const pnlEl = document.getElementById('tl-pnl-' + idx);
-    if (pnlEl) { pnlEl.textContent = '—'; pnlEl.style.color = 'var(--subtext)'; }
-  }
-}
-
-async function deleteTl(idx, sym) {
-  try {
-    await fetch(`/api/trades/${sym}/${idx}`, {method:'DELETE'});
-    renderTradeLog();
-    showToast('Trade deleted');
-  } catch(e) { showToast('Delete failed', true); }
 }
 
 // ══════════════════════════════════════════════

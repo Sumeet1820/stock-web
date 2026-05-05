@@ -1,0 +1,36 @@
+{
+  "watchlist": {
+    "OMAXAUTO": {
+      "name": "OMAXAUTO",
+      "sector": "",
+      "sym": "OMAXAUTO",
+      "added": "5/5/2026"
+    },
+    "CREDITACC": {
+      "name": "CreditAccess Grameen Ltd",
+      "price": 1524,
+      "sector": "",
+      "sym": "CREDITACC",
+      "added": "5/5/2026"
+    },
+    "DSSL": {
+      "name": "Dynacons Systems & Solutions Ltd",
+      "price": 1250,
+      "sector": "",
+      "sym": "DSSL",
+      "added": "5/5/2026"
+    }
+  },
+  "trades": {
+    "ADANIGREEN": [
+      {
+        "date": "2026-05-05",
+        "logged": "2026-05-05T15:49:49.855Z",
+        "price": 1300,
+        "qty": 4,
+        "type": "BUY"
+      }
+    ]
+  },
+  "notes": {}
+}
