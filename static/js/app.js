@@ -84,22 +84,30 @@ function toggleSidebar() {
 // ── Indices Strip ──────────────────────────────
 async function loadIndices() {
   try {
-    const res = await fetch('/api/market/index');
+    // Use /api/indices which returns proper index data with categories
+    const res = await fetch('/api/indices');
     const rows = await res.json();
     const strip = document.getElementById('indices-strip');
-    if (!rows || rows.error) { strip.innerHTML = '<div class="loading-strip">⚠️ Indices unavailable</div>'; return; }
+    if (!rows || rows.error || !rows.length) {
+      strip.innerHTML = '<div class="loading-strip">⚠️ Indices unavailable</div>';
+      return;
+    }
 
-    const main = ['NIFTY 50', 'NIFTY BANK', 'NIFTY IT', 'NIFTY MIDCAP 100', 'SENSEX'];
-    const filtered = rows.filter(r => main.some(n => r.symbol.includes(n.split(' ').pop())));
-    const display = (filtered.length >= 3 ? filtered : rows).slice(0, 8);
+    // Show key indices in strip
+    const mainNames = ['NIFTY 50','NIFTY BANK','NIFTY IT','NIFTY MIDCAP 100','NIFTY NEXT 50','INDIA VIX','NIFTY FMCG','NIFTY AUTO'];
+    let display = rows.filter(r => mainNames.includes(r.name));
+    if (display.length < 3) display = rows.filter(r => r.cat === 'broad');
+    if (display.length < 3) display = rows;
+    display = display.slice(0, 8);
 
     strip.innerHTML = display.map(r => {
-      const chg = parseFloat(r.change_pct) || 0;
-      const cls = chg >= 0 ? 'idx-up' : 'idx-down';
+      const chg = parseFloat(r.chg) || 0;
+      const cls   = chg >= 0 ? 'idx-up' : 'idx-down';
       const arrow = chg >= 0 ? '▲' : '▼';
-      return `<div class="index-card">
-        <div class="idx-name">${r.symbol.replace('NIFTY','NIFTY').substring(0,14)}</div>
-        <div class="idx-val">${fmtNum(r.ltp)}</div>
+      const disp  = r.name.replace(/^NIFTY\s*/i,'').substring(0, 14);
+      return `<div class="index-card" onclick="loadIndexStocksFromRp('${escHTML(r.name)}')">
+        <div class="idx-name">${escHTML(disp)}</div>
+        <div class="idx-val">${fmtNum(r.last)}</div>
         <div class="idx-chg ${cls}">${arrow} ${Math.abs(chg).toFixed(2)}%</div>
       </div>`;
     }).join('');
