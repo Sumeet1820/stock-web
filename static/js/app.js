@@ -363,14 +363,24 @@ function renderAnalysis(data) {
   let html = '';
 
   // ── Company Header
-  const sector = data.sector || data.industry || '';
+  const sector   = data.sector   || '';
+  const industry = data.industry || '';
   html += `<div class="company-header">
     <div>
       <div class="company-name">${escHTML(name)}</div>
       <div class="company-meta">
         ${data.is_consolidated ? `<span class="badge badge-cons">✅ Consolidated</span>` : `<span class="badge badge-standalone">⚠️ Standalone</span>`}
         ${sym ? `<span class="badge" style="background:#1C2240;color:var(--accent)">NSE: ${escHTML(sym)}</span>` : ''}
-        ${sector ? `<span class="badge badge-sector">🏭 ${escHTML(sector)}</span>` : ''}
+        ${sector ? `<span class="badge badge-sector" title="Click to see sector on Screener.in"
+            style="cursor:pointer"
+            onclick="window.open('https://www.screener.in/screens/?query=Sector+%3D+${encodeURIComponent(sector)}','_blank')">
+            🏭 ${escHTML(sector)}
+          </span>` : ''}
+        ${industry && industry !== sector ? `<span class="badge" style="background:#1A2A1A;color:#00CC88;cursor:pointer"
+            title="Click to see industry on Screener.in"
+            onclick="window.open('https://www.screener.in/screens/?query=Industry+%3D+${encodeURIComponent(industry)}','_blank')">
+            🔧 ${escHTML(industry)}
+          </span>` : ''}
       </div>
     </div>
   </div>`;
@@ -1416,8 +1426,87 @@ async function loadEtf(type, btn) {
     btn.classList.add('active');
   }
   const cont = document.getElementById('etf-content');
-  cont.innerHTML = '<div class="loading-box">⏳ ETF data load ho rahi hai...</div>';
 
+  // RSI Screener tab
+  if (type === 'rsi' || type === 'scanner') {
+    const isRsi = type === 'rsi';
+    cont.innerHTML = `<div class="loading-box">⏳ Chartink se ${isRsi ? 'RSI 50 Crossover' : 'ETF Scanner'} data fetch ho raha hai...</div>`;
+    try {
+      const endpoint = isRsi ? '/api/etf/rsi-screener' : '/api/etf/scanner';
+      const res  = await fetch(endpoint);
+      const etfs = await res.json();
+
+      if (!etfs || etfs.error) {
+        cont.innerHTML = `<div class="loading-box" style="color:var(--red)">❌ ${escHTML(etfs?.error || 'Data nahi mila')}</div>`;
+        return;
+      }
+      if (!etfs.length) {
+        cont.innerHTML = `<div class="loading-box">
+          📊 Aaj koi ETF ${isRsi ? 'RSI 50 cross nahi kiya' : 'scanner conditions pass nahi kiya'}<br>
+          <span style="font-size:12px;color:var(--subtext)">Kal dobara check karo</span>
+        </div>`;
+        return;
+      }
+
+      // Get unique categories for dropdown
+      const cats = [...new Set(etfs.map(e => e.index_cat || '').filter(Boolean))].sort();
+
+      const headerInfo = isRsi
+        ? `<b style="color:var(--green)">📈 RSI 50 Crossover</b>
+           <span style="color:var(--subtext);font-size:12px;margin-left:8px">Yeh ETFs aaj RSI 50 ke upar aaye — bullish momentum signal</span>`
+        : `<b style="color:var(--accent)">🔭 ETF Scanner</b>
+           <span style="color:var(--subtext);font-size:12px;margin-left:8px">Vol>100K + Close>EMA50 + RSI>55 + Breakout</span>`;
+
+      cont.innerHTML = `
+        <div style="background:rgba(0,230,168,0.06);border:1px solid rgba(0,230,168,0.2);border-radius:10px;padding:10px 16px;margin-bottom:12px">
+          ${headerInfo}
+        </div>
+
+        <!-- Category Filter -->
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--subtext);font-weight:600">Filter by Category:</span>
+          <select id="etf-rsi-cat-filter" onchange="filterEtfRsiTable()"
+            style="background:var(--card2);border:1px solid var(--border);color:var(--text);
+                   padding:6px 12px;border-radius:6px;font-size:13px;outline:none;cursor:pointer">
+            <option value="">All Categories</option>
+            ${cats.map(c => `<option value="${escHTML(c)}">${escHTML(c)}</option>`).join('')}
+          </select>
+          <span id="etf-rsi-count" style="font-size:12px;color:var(--subtext)">${etfs.length} ETFs</span>
+        </div>
+
+        <div class="etf-table-wrap">
+          <table class="market-table" id="etf-rsi-table">
+            <thead><tr>
+              <th>#</th><th>Symbol</th><th>Name</th><th>Index/Category</th>
+              <th>Price</th><th>Change %</th>
+              <th>Signal</th>
+            </tr></thead>
+            <tbody id="etf-rsi-tbody">
+              ${etfs.map((e, i) => {
+                const chg = parseFloat(e.chg) || 0;
+                const cls = chg >= 0 ? 'up-col' : 'dn-col';
+                const cat = e.index_cat || '';
+                const catCol = etfCatColor(cat);
+                return `<tr data-cat="${escHTML(cat)}" onclick="quickLoad('${escHTML(e.symbol)}')">
+                  <td class="etf-rsi-num" style="color:var(--subtext)">${i+1}</td>
+                  <td class="sym-col">${escHTML(e.symbol)}</td>
+                  <td style="color:var(--subtext);font-size:12px">${escHTML((e.name||'').substring(0,30))}</td>
+                  <td><span style="background:${catCol}22;color:${catCol};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">${escHTML(cat||'—')}</span></td>
+                  <td>₹${fmtNum(e.ltp)}</td>
+                  <td class="${cls}">${chg >= 0 ? '▲' : '▼'} ${Math.abs(chg).toFixed(2)}%</td>
+                  <td style="color:var(--green);font-size:11px">${escHTML(e.signal||'')}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>`;
+    } catch(e) {
+      cont.innerHTML = `<div class="loading-box" style="color:var(--red)">❌ ${escHTML(e.message)}</div>`;
+    }
+    return;
+  }
+
+  cont.innerHTML = '<div class="loading-box">⏳ ETF data load ho rahi hai...</div>';
   try {
     const endpoint = type === 'screener' ? '/api/etf/screener' : '/api/etf/list';
     const res  = await fetch(endpoint);
@@ -1428,32 +1517,130 @@ async function loadEtf(type, btn) {
       return;
     }
 
-    cont.innerHTML = `<div class="etf-table-wrap">
-      <table class="market-table">
-        <thead><tr>
-          <th>#</th><th>Symbol</th><th>Name</th>
-          <th>Price</th><th>Change %</th><th>Volume</th>
-        </tr></thead>
-        <tbody>
-          ${etfs.map((e, i) => {
-            const chg = parseFloat(e.chg) || 0;
-            const cls = chg >= 0 ? 'up-col' : 'dn-col';
-            const arrow = chg >= 0 ? '▲' : '▼';
-            return `<tr onclick="quickLoad('${escHTML(e.symbol)}')">
-              <td style="color:var(--subtext)">${i+1}</td>
-              <td class="sym-col">${escHTML(e.symbol)}</td>
-              <td style="color:var(--subtext);font-size:12px">${escHTML((e.name||'').substring(0,35))}</td>
-              <td>₹${fmtNum(e.ltp)}</td>
-              <td class="${cls}">${arrow} ${Math.abs(chg).toFixed(2)}%</td>
-              <td style="color:var(--subtext)">${fmtVol(e.vol)}</td>
-            </tr>`;
-          }).join('')}
-        </tbody>
-      </table>
-    </div>`;
+    const isScreener = type === 'screener';
+    // Get unique categories for filter dropdown
+    const cats = [...new Set(etfs.map(e => e.index_cat || _guessEtfCat(e.symbol, e.name)).filter(Boolean))].sort();
+
+    cont.innerHTML = `
+      ${isScreener ? `<div style="background:rgba(77,142,255,0.06);border:1px solid rgba(77,142,255,0.2);border-radius:10px;padding:10px 16px;margin-bottom:12px;font-size:12px;color:var(--subtext)">
+        🔍 <b style="color:var(--accent)">ETF Screener</b> — Volume > 10K + Change > -5% + Sorted by % change
+      </div>` : ''}
+
+      <!-- Category Filter -->
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+        <span style="font-size:12px;color:var(--subtext);font-weight:600">Filter by Category:</span>
+        <select id="etf-cat-filter" onchange="filterEtfTable()"
+          style="background:var(--card2);border:1px solid var(--border);color:var(--text);
+                 padding:6px 12px;border-radius:6px;font-size:13px;outline:none;cursor:pointer">
+          <option value="">All Categories</option>
+          ${cats.map(c => `<option value="${escHTML(c)}">${escHTML(c)}</option>`).join('')}
+        </select>
+        <span id="etf-count" style="font-size:12px;color:var(--subtext)">${etfs.length} ETFs</span>
+      </div>
+
+      <div class="etf-table-wrap">
+        <table class="market-table" id="etf-main-table">
+          <thead><tr>
+            <th>#</th><th>Symbol</th><th>Name</th><th>Index/Category</th>
+            <th>Price</th><th>Change %</th><th>Volume</th>
+          </tr></thead>
+          <tbody id="etf-tbody">
+            ${etfs.map((e, i) => {
+              const chg = parseFloat(e.chg) || 0;
+              const cls = chg >= 0 ? 'up-col' : 'dn-col';
+              const cat = e.index_cat || _guessEtfCat(e.symbol, e.name);
+              const catCol = etfCatColor(cat);
+              return `<tr data-cat="${escHTML(cat)}" onclick="quickLoad('${escHTML(e.symbol)}')">
+                <td class="etf-row-num" style="color:var(--subtext)">${i+1}</td>
+                <td class="sym-col">${escHTML(e.symbol)}</td>
+                <td style="color:var(--subtext);font-size:12px">${escHTML((e.name||'').substring(0,30))}</td>
+                <td><span style="background:${catCol}22;color:${catCol};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">${escHTML(cat||'—')}</span></td>
+                <td>₹${fmtNum(e.ltp)}</td>
+                <td class="${cls}">${chg >= 0 ? '▲' : '▼'} ${Math.abs(chg).toFixed(2)}%</td>
+                <td style="color:var(--subtext)">${fmtVol(e.vol)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
   } catch(e) {
     cont.innerHTML = `<div class="loading-box" style="color:var(--red)">❌ ${escHTML(e.message)}</div>`;
   }
+}
+
+// ETF RSI/Scanner table filter
+function filterEtfRsiTable() {
+  const sel = document.getElementById('etf-rsi-cat-filter');
+  const cnt = document.getElementById('etf-rsi-count');
+  if (!sel) return;
+  const val = sel.value;
+  const rows = document.querySelectorAll('#etf-rsi-tbody tr');
+  let visible = 0;
+  rows.forEach(row => {
+    const cat = row.getAttribute('data-cat') || '';
+    const show = !val || cat === val;
+    row.style.display = show ? '' : 'none';
+    if (show) {
+      visible++;
+      const numCell = row.querySelector('.etf-rsi-num');
+      if (numCell) numCell.textContent = visible;
+    }
+  });
+  if (cnt) cnt.textContent = `${visible} ETFs${val ? ' in ' + val : ''}`;
+}
+
+// ETF category filter — no server call, pure JS
+function filterEtfTable() {
+  const sel = document.getElementById('etf-cat-filter');
+  const cnt = document.getElementById('etf-count');
+  if (!sel) return;
+  const val = sel.value;
+  const rows = document.querySelectorAll('#etf-tbody tr');
+  let visible = 0;
+  rows.forEach((row, i) => {
+    const cat = row.getAttribute('data-cat') || '';
+    const show = !val || cat === val;
+    row.style.display = show ? '' : 'none';
+    if (show) {
+      visible++;
+      // Re-number visible rows
+      const numCell = row.querySelector('.etf-row-num');
+      if (numCell) numCell.textContent = visible;
+    }
+  });
+  if (cnt) cnt.textContent = `${visible} ETFs${val ? ' in ' + val : ''}`;
+}
+
+// ETF category color coding
+function etfCatColor(cat) {
+  const map = {
+    'NIFTY 50':'#4D8EFF','NIFTY NEXT 50':'#7B6FE8','BANK':'#FF9500',
+    'IT':'#00E6A8','MIDCAP':'#FFD700','SMALLCAP':'#FF6B6B',
+    'PHARMA':'#00CC88','FMCG':'#FF8C42','AUTO':'#4FC3F7',
+    'INFRA':'#A8E063','METAL':'#B0BEC5','ENERGY':'#FFB347',
+    'REALTY':'#CE93D8','GOLD':'#FFD700','SILVER':'#B0BEC5',
+    'LIQUID':'#80CBC4','DEBT':'#90CAF9','INTL':'#F48FB1',
+    'PSU':'#FFCC02','DIVIDEND':'#A5D6A7','FACTOR':'#9B6FE8',
+    'OTHER':'#8B92B8',
+  };
+  return map[cat] || '#8B92B8';
+}
+
+// Client-side ETF category guess (fallback when server doesn't provide)
+function _guessEtfCat(symbol, name) {
+  const s = ((symbol||'') + ' ' + (name||'')).toUpperCase();
+  if (/NIFTY50|NIFTY 50|N50|NIFTYBEES|JUNIORBEES/.test(s)) return 'NIFTY 50';
+  if (/BANK|BANKBEES/.test(s)) return 'BANK';
+  if (/ITBEES|NIFTYIT|\bIT\b/.test(s)) return 'IT';
+  if (/MIDCAP|MID150/.test(s)) return 'MIDCAP';
+  if (/SMALLCAP|SMALL/.test(s)) return 'SMALLCAP';
+  if (/PHARMA|HEALTH/.test(s)) return 'PHARMA';
+  if (/GOLD|GOLDBEES/.test(s)) return 'GOLD';
+  if (/SILVER/.test(s)) return 'SILVER';
+  if (/LIQUID|OVERNIGHT/.test(s)) return 'LIQUID';
+  if (/DEBT|BOND|GILT/.test(s)) return 'DEBT';
+  if (/NASDAQ|US|WORLD|GLOBAL/.test(s)) return 'INTL';
+  return 'OTHER';
 }
 
 // ── IPO Page (loaded via nav if added) ────────

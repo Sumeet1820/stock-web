@@ -821,6 +821,11 @@ CHARTINK_SCAN_CLAUSES = {
         "( {cash} (  daily volume >  daily sma(  daily volume , 20 ) and  daily close >  daily upper bollinger band( 20 , 2 ) and  weekly close >  weekly upper bollinger band( 20 , 2 ) and  monthly close >  monthly upper bollinger band( 20 , 2 ) and  daily rsi( 14 ) >  60 and  weekly rsi( 14 ) >  60 and  monthly rsi( 14 ) >  60 and  monthly wma(  monthly close , 30 ) >  monthly wma(  monthly close , 50 ) and  1 month ago  wma(  monthly close , 30 )<=  1 month ago  wma(  monthly close , 50 ) and  monthly wma(  monthly close , 30 ) >  60 and  monthly wma(  monthly close , 50 ) >  60 ) )",
     "swing-scanner-20102336":
         "( {cash} (  daily open >=  1 day ago close and  daily close >=  daily ema(  daily close , 20 ) and  daily ema(  daily close , 10 ) >=  daily ema(  daily close , 20 ) and  daily macd line( 26 , 12 , 9 ) >  daily macd signal( 26 , 12 , 9 ) and  1 day ago  macd line( 26 , 12 , 9 ) <=  1 day ago  macd signal( 26 , 12 , 9 ) and  daily rsi( 14 ) >=  59 and  market cap >=  2000 and  quarterly net sales >=  1 quarter ago net sales ) )",
+    # ── ETF Screeners ──────────────────────────────────────────────────────────
+    "etf-50-rsi-crossover":
+        "( {cash} (  daily rsi( 14 ) >  50 and  1 day ago  rsi( 14 ) <  50 ) )",
+    "etf-scanner-7993":
+        "( {cash} (  daily volume >  100000 and  daily close >  daily ema(  daily close , 50 ) and  daily rsi( 14 ) >  55 and  daily close >  1 day ago max( 20 ,  daily high ) ) )",
 }
 
 def fetch_chartink(url):
@@ -996,11 +1001,9 @@ def fetch_nse_etf_list():
         ).strip()
 
         ltp = _f(
-            item.get('ltP') or              # ✅ NSE actual key (verified)
+            item.get('ltP') or
             item.get('lastPrice') or
             item.get('ltp') or
-            item.get('lastTradedPrice') or
-            item.get('price') or
             item.get('nav')
         )
         # 'per' = % change, 'chn' = absolute ₹ change in NSE ETF API
@@ -1039,6 +1042,16 @@ def fetch_nse_etf_list():
             best[sym] = entry
 
     etfs = list(best.values())
+
+    # ── Use NSE's own per field as chg (most accurate — official NSE data) ─────
+    # NSE 'per' = official % change from previous close (same as NSE website shows)
+    # Only recalculate if per was 0 or missing
+    for e in etfs:
+        if e.get('chg') == 0:
+            ltp_v  = e.get('ltp', 0)
+            prev_v = e.get('_prev', 0)
+            if ltp_v > 0 and prev_v > 0:
+                e['chg'] = round((ltp_v - prev_v) / prev_v * 100, 2)
     print(f'[ETF] NSE dedup: {len(etfs)} | ltp>{sum(1 for e in etfs if e["ltp"]>0)} | prev>{sum(1 for e in etfs if e.get("_prev",0)>0)}')
 
     # ── Fix using yfinance for ETFs where prev=0 (can't calc % without prev) ─

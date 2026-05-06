@@ -1021,13 +1021,168 @@ def api_chartink(slug):
 @app.route('/api/etf/list')
 def api_etf_list():
     try:
-        etfs=fetch_nse_etf_list(); etfs.sort(key=lambda x:x.get('chg',0),reverse=True); return jsonify(etfs)
-    except Exception as e: return jsonify({'error':str(e)}),500
+        etfs = fetch_nse_etf_list()
+        etfs.sort(key=lambda x: x.get('chg', 0), reverse=True)
+        for e in etfs:
+            e['index_cat'] = _etf_index_category(e.get('symbol',''), e.get('name',''))
+        return jsonify(etfs)
+    except Exception as e: return jsonify({'error': str(e)}), 500
 
 @app.route('/api/etf/screener')
 def api_etf_screener():
     try: return jsonify(fetch_nse_etf_screener())
-    except Exception as e: return jsonify({'error':str(e)}),500
+    except Exception as e: return jsonify({'error': str(e)}), 500
+
+@app.route('/api/etf/rsi-screener')
+def api_etf_rsi_screener():
+    """ETFs where RSI just crossed above 50 — uses Chartink for speed.
+    Chartink se RSI 50 crossover stocks fetch karo, phir ETF list se filter karo.
+    Actual RSI values yfinance se calculate karo (sirf matched ETFs ke liye — fast)."""
+    try:
+        import yfinance as yf
+
+        # Step 1: Chartink se RSI 50 crossover stocks fetch karo
+        chartink_results = fetch_chartink("https://chartink.com/screener/etf-50-rsi-crossover")
+        if not chartink_results:
+            return jsonify({'error': 'Chartink se data nahi mila — cookies expire ho gayi hain'}), 503
+
+        # Step 2: NSE ETF list fetch karo (symbols set)
+        all_etfs = fetch_nse_etf_list()
+        etf_map  = {e['symbol'].upper(): e for e in all_etfs}
+
+        # Step 3: Chartink results mein se sirf ETF symbols rakhna
+        matched = []
+        for row in chartink_results:
+            sym = (row.get('symbol') or row.get('nsecode') or '').upper().strip()
+            if not sym: continue
+            etf_data = etf_map.get(sym)
+            if not etf_data: continue  # Not an ETF — skip
+            matched.append({'sym': sym, 'etf': etf_data, 'row': row})
+
+        print(f"[ETF RSI] Chartink: {len(chartink_results)} stocks → {len(matched)} ETFs matched")
+
+        # Step 4: Actual RSI values fetch karo (sirf matched ETFs ke liye)
+        results = []
+        if matched:
+            syms_ns = [f"{m['sym']}.NS" for m in matched]
+            try:
+                hist_data = yf.download(syms_ns, period='2mo', interval='1d',
+                                        auto_adjust=True, progress=False, group_by='ticker')
+            except: hist_data = None
+
+            def _rsi(closes, p=14):
+                if len(closes) < p+2: return None
+                d = [closes[i]-closes[i-1] for i in range(1,len(closes))]
+                g = [max(x,0) for x in d]; l = [abs(min(x,0)) for x in d]
+                ag = sum(g[:p])/p; al = sum(l[:p])/p
+                for i in range(p,len(d)):
+                    ag=(ag*(p-1)+g[i])/p; al=(al*(p-1)+l[i])/p
+                return round(100-(100/(1+ag/al)),1) if al>0 else 100.0
+
+            for m in matched:
+                sym = m['sym']; etf_data = m['etf']; row = m['row']
+                rsi_now = rsi_prev = None
+                try:
+                    if hist_data is not None:
+                        sym_ns = f"{sym}.NS"
+                        if hasattr(hist_data.columns, 'levels'):
+                            closes = hist_data[sym_ns]['Close'].dropna().values.astype(float)
+                        elif len(matched) == 1:
+                            closes = hist_data['Close'].dropna().values.astype(float)
+                        else: closes = []
+                        if len(closes) >= 16:
+                            rsi_now  = _rsi(closes)
+                            rsi_prev = _rsi(closes[:-1])
+                except: pass
+
+                ltp = etf_data.get('ltp') or row.get('ltp') or row.get('close') or 0
+                chg = etf_data.get('chg') or row.get('per_chg') or 0
+                vol = etf_data.get('vol') or row.get('volume') or 0
+
+                # Signal with actual RSI values
+                if rsi_now and rsi_prev:
+                    signal = f'RSI {rsi_prev:.1f} → {rsi_now:.1f} (crossed 50 ✅)'
+                else:
+                    signal = 'RSI crossed above 50 ✅'
+
+                results.append({
+                    'symbol':    sym,
+                    'name':      etf_data.get('name', sym),
+                    'ltp':       ltp,
+                    'chg':       chg,
+                    'vol':       vol,
+                    'index_cat': _etf_index_category(sym, etf_data.get('name', '')),
+                    'rsi':       rsi_now or '>50',
+                    'rsi_prev':  rsi_prev or '<50',
+                    'signal':    signal,
+                })
+
+        results.sort(key=lambda x: float(x.get('chg') or 0), reverse=True)
+        return jsonify(results)
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/etf/scanner')
+def api_etf_scanner():
+    """ETF Scanner — Volume > 100K, Close > EMA50, RSI > 55, Breakout"""
+    try:
+        chartink_results = fetch_chartink("https://chartink.com/screener/etf-scanner-7993")
+        if not chartink_results:
+            return jsonify({'error': 'Chartink se data nahi mila — cookies expire ho gayi hain'}), 503
+        all_etfs = fetch_nse_etf_list()
+        etf_map  = {e['symbol'].upper(): e for e in all_etfs}
+        results  = []
+        for row in chartink_results:
+            sym = (row.get('symbol') or row.get('nsecode') or '').upper().strip()
+            if not sym: continue
+            etf_data = etf_map.get(sym)
+            if not etf_data: continue
+            ltp = etf_data.get('ltp') or row.get('ltp') or row.get('close') or 0
+            chg = etf_data.get('chg') or row.get('per_chg') or 0
+            vol = etf_data.get('vol') or row.get('volume') or 0
+            results.append({
+                'symbol':    sym,
+                'name':      etf_data.get('name', sym),
+                'ltp':       ltp,
+                'chg':       chg,
+                'vol':       vol,
+                'index_cat': _etf_index_category(sym, etf_data.get('name', '')),
+                'signal':    'Vol>100K + Close>EMA50 + RSI>55 + Breakout ✅',
+            })
+        results.sort(key=lambda x: float(x.get('chg') or 0), reverse=True)
+        print(f"[ETF Scanner] Chartink: {len(chartink_results)} → {len(results)} ETFs")
+        return jsonify(results)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+def _etf_index_category(symbol, name):
+    """Detect which index/category an ETF belongs to based on symbol/name"""
+    s = (symbol + ' ' + name).upper()
+    if any(x in s for x in ['NIFTY50','NIFTY 50','N50','NIFTYBEES','JUNIORBEES']): return 'NIFTY 50'
+    if any(x in s for x in ['NEXT50','NIFTYNXT','JUNIOR','NXTSMALL']): return 'NIFTY NEXT 50'
+    if any(x in s for x in ['BANKBEES','BANKNIFTY','BANK','BANKIETF','PSUBNKBEES']): return 'BANK'
+    if any(x in s for x in ['ITBEES','NIFTYIT','TECH','IT ETF','ITETF']): return 'IT'
+    if any(x in s for x in ['MIDCAP','MID150','MID100','MIDSMALL','MAFANG']): return 'MIDCAP'
+    if any(x in s for x in ['SMALLCAP','SMALL250','SMLCAP']): return 'SMALLCAP'
+    if any(x in s for x in ['PHARMA','HEALTH','MEDICO']): return 'PHARMA'
+    if any(x in s for x in ['FMCG','CONSUMPTION','CONSUM']): return 'FMCG'
+    if any(x in s for x in ['AUTO','AUTOBEES']): return 'AUTO'
+    if any(x in s for x in ['INFRA','INFRASTRUCTURE']): return 'INFRA'
+    if any(x in s for x in ['METAL','STEEL']): return 'METAL'
+    if any(x in s for x in ['ENERGY','OIL','GAS','POWER']): return 'ENERGY'
+    if any(x in s for x in ['REALTY','REAL ESTATE']): return 'REALTY'
+    if any(x in s for x in ['GOLD','GOLDBEES','SGOLD','GOLDCASE']): return 'GOLD'
+    if any(x in s for x in ['SILVER','SILVERBEES']): return 'SILVER'
+    if any(x in s for x in ['LIQUID','OVERNIGHT','MONEY','CASH']): return 'LIQUID'
+    if any(x in s for x in ['DEBT','BOND','GILT','GSEC','BHARAT']): return 'DEBT'
+    if any(x in s for x in ['NASDAQ','US','WORLD','GLOBAL','HANG','CHINA']): return 'INTL'
+    if any(x in s for x in ['PSU','CPSE','GOVT']): return 'PSU'
+    if any(x in s for x in ['DIVIDEND','DIV']): return 'DIVIDEND'
+    if any(x in s for x in ['MOMENTUM','ALPHA','QUALITY','VALUE','LOWVOL']): return 'FACTOR'
+    return 'OTHER'
 
 @app.route('/api/news/<sym>')
 def api_news(sym):
