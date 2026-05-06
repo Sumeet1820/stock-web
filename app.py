@@ -1153,6 +1153,31 @@ def api_sparkline(sym):
         return jsonify([round(c,2) for c in closes])
     except: return jsonify([])
 
+# ── Keep-Alive ping endpoint ──────────────────────────────────────────────────
+@app.route('/ping')
+def ping():
+    return 'pong', 200
+
+def _keep_alive():
+    """Ping self every 14 min so Render free tier doesn't sleep"""
+    import time, urllib.request
+    app_url = os.environ.get('RENDER_EXTERNAL_URL', '').rstrip('/')
+    if not app_url:
+        return  # Only run on Render
+    time.sleep(90)  # Wait 90s after startup
+    while True:
+        try:
+            urllib.request.urlopen(f"{app_url}/ping", timeout=10)
+            print("[keep-alive] pinged ✅")
+        except Exception as ex:
+            print(f"[keep-alive] {ex}")
+        time.sleep(14 * 60)  # Every 14 minutes
+
+# Start keep-alive on Render (gunicorn bhi use karta hai yeh)
+if os.environ.get('RENDER_EXTERNAL_URL'):
+    threading.Thread(target=_keep_alive, daemon=True).start()
+    print("🔄 Keep-alive thread started")
+
 if __name__=='__main__':
     print("🚀 Stock Analyzer Pro Web — http://localhost:5000")
     app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
