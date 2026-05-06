@@ -24,7 +24,16 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import requests as _req
 
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(32)  # Session encryption key
+# Permanent secret key — restart pe session expire nahi hoga
+_sk_file = os.path.join(BASE, '.secret_key')
+if os.path.exists(_sk_file):
+    with open(_sk_file) as f: app.secret_key = f.read().strip()
+else:
+    _sk = secrets.token_hex(32)
+    with open(_sk_file, 'w') as f: f.write(_sk)
+    app.secret_key = _sk
+from datetime import timedelta
+app.permanent_session_lifetime = timedelta(days=365)
 
 BROAD = {'NIFTY 50','NIFTY NEXT 50','NIFTY 100','NIFTY 200','NIFTY 500','NIFTY MIDCAP 50','NIFTY MIDCAP 100','NIFTY MIDCAP 150','NIFTY SMLCAP 50','NIFTY SMLCAP 100','NIFTY SMLCAP 250','NIFTY MIDSML 400','NIFTY LARGEMID250','NIFTY MID SELECT','NIFTY MICROCAP250','NIFTY TOTAL MKT','INDIA VIX','NIFTY500 MULTICAP','NIFTY500 LMS EQL','NIFTY FPI 150'}
 SECTORAL = {'NIFTY AUTO','NIFTY BANK','NIFTY FIN SERVICE','NIFTY FINSRV25 50','NIFTY FMCG','NIFTY IT','NIFTY MEDIA','NIFTY METAL','NIFTY PHARMA','NIFTY PSU BANK','NIFTY REALTY','NIFTY PVT BANK','NIFTY HEALTHCARE','NIFTY CONSR DURBL','NIFTY OIL AND GAS','NIFTY MIDSML HLTH','NIFTY CHEMICALS','NIFTY500 HEALTH','NIFTY FINSEREXBNK','NIFTY MS IT TELCM','NIFTY MS FIN SERV'}

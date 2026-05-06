@@ -1,0 +1,86 @@
+{
+  "watchlist": {
+    "SOTL": {
+      "name": "Savita Oil Technologies Ltd",
+      "price": 435,
+      "sector": "",
+      "sym": "SOTL",
+      "added": "6/5/2026"
+    }
+  },
+  "trades": {
+    "CHENNPETRO": [
+      {
+        "date": "2026-05-06",
+        "type": "BUY",
+        "qty": 5,
+        "price": 1079,
+        "logged": "2026-05-06T06:13:38.134Z"
+      }
+    ],
+    "HSCL": [
+      {
+        "date": "2026-04-28",
+        "type": "BUY",
+        "qty": 10,
+        "price": 507,
+        "logged": "2026-05-06T06:14:23.622Z"
+      }
+    ],
+    "KEI": [
+      {
+        "date": "2026-05-05",
+        "type": "BUY",
+        "qty": 1,
+        "price": 5137,
+        "logged": "2026-05-06T06:11:38.659Z"
+      }
+    ],
+    "KMEW": [
+      {
+        "date": "2026-05-06",
+        "type": "BUY",
+        "qty": 2,
+        "price": 2037,
+        "logged": "2026-05-06T06:12:16.012Z"
+      }
+    ],
+    "NMDC": [
+      {
+        "date": "2026-05-01",
+        "type": "BUY",
+        "qty": 45,
+        "price": 91,
+        "logged": "2026-05-06T06:15:44.392Z"
+      }
+    ],
+    "PTC": [
+      {
+        "date": "2026-04-30",
+        "type": "BUY",
+        "qty": 23,
+        "price": 211,
+        "logged": "2026-05-06T06:12:57.847Z"
+      }
+    ],
+    "RRKABEL": [
+      {
+        "date": "2026-04-28",
+        "type": "BUY",
+        "qty": 3,
+        "price": 1586,
+        "logged": "2026-05-06T06:11:05.849Z"
+      }
+    ],
+    "WELCORP": [
+      {
+        "date": "2026-04-13",
+        "type": "BUY",
+        "qty": 5,
+        "price": 1007,
+        "logged": "2026-05-06T06:15:04.437Z"
+      }
+    ]
+  },
+  "notes": {}
+}

@@ -55,18 +55,27 @@ async function setupAuth(callback) {
       setUserId(data.email);
       showUserBadge(data.name, data.email);
 
-      // Restore last visited page/tab from URL hash
+      // Restore last visited page/tab/stock from URL hash
       const hash = window.location.hash.replace('#', '');
       const validPages = ['home','market','screener','watchlist','etf','ipo'];
       const homeTabs   = ['tradelog','broad','sectoral','thematic','strategy'];
 
-      if (hash.startsWith('home-')) {
-        // e.g. #home-broad → home page + broad tab
+      if (hash.startsWith('stock-sym-')) {
+        // Refresh on stock page — reload same stock
+        const sym = decodeURIComponent(hash.replace('stock-sym-', ''));
+        callback();
+        setTimeout(() => loadStockBySymbol(sym), 100);
+        return;
+      } else if (hash.startsWith('stock-url-')) {
+        // Refresh on stock page (URL based)
+        const url = decodeURIComponent(hash.replace('stock-url-', ''));
+        callback();
+        setTimeout(() => loadStockByUrl(url, ''), 100);
+        return;
+      } else if (hash.startsWith('home-')) {
         const tab = hash.replace('home-', '');
         if (homeTabs.includes(tab)) {
-          // Show home page first (already active by default)
           callback();
-          // Then switch to the saved tab (after a tick so DOM is ready)
           setTimeout(() => switchHomeTab(tab), 50);
           return;
         }
@@ -138,10 +147,9 @@ function showPage(page) {
   document.getElementById('page-' + page).classList.add('active');
   document.getElementById('nav-' + page).classList.add('active');
 
-  // Save current page in URL hash
   history.replaceState(null, '', '#' + page);
+  sessionStorage.setItem('prev_hash', page); // for closeAnalysis restore
 
-  // Auto-close sidebar on mobile
   if (window.innerWidth <= 900) {
     document.getElementById('sidebar').classList.remove('open');
     const ov = document.getElementById('sidebar-overlay');
@@ -163,8 +171,8 @@ function switchHomeTab(tab, btn) {
     const idx = ['tradelog','broad','sectoral','thematic','strategy'].indexOf(tab);
     if (idx >= 0 && btns[idx]) btns[idx].classList.add('active');
   }
-  // Save home tab in hash too
   history.replaceState(null, '', '#home-' + tab);
+  sessionStorage.setItem('prev_hash', 'home-' + tab); // for closeAnalysis restore
 
   if (tab === 'tradelog') renderTradeLog();
   else loadHeatmap(tab);
@@ -287,6 +295,8 @@ async function loadStockBySymbol(sym) {
   openAnalysisPanel(sym);
   currentSym = sym.toUpperCase();
   currentUrl = null;
+  // Save in hash so refresh restores this stock
+  history.replaceState(null, '', '#stock-sym-' + encodeURIComponent(currentSym));
   try {
     const res = await fetch(`/api/analyze?sym=${encodeURIComponent(sym)}`);
     const data = await res.json();
@@ -301,6 +311,8 @@ async function loadStockBySymbol(sym) {
 async function loadStockByUrl(url, name) {
   openAnalysisPanel(name);
   currentUrl = url;
+  // Save in hash so refresh restores this stock
+  history.replaceState(null, '', '#stock-url-' + encodeURIComponent(url));
   try {
     const res = await fetch(`/api/analyze?url=${encodeURIComponent(url)}`);
     const data = await res.json();
@@ -834,16 +846,34 @@ async function loadFromServer() {
   try {
     const res  = await fetch('/api/userdata');
     const data = await res.json();
-    if (data && typeof data === 'object') {
-      if (data.watchlist && Object.keys(data.watchlist).length > 0)
-        lsSet(_cacheKey('wl_v1'), data.watchlist);
-      if (data.trades && Object.keys(data.trades).length > 0)
-        lsSet(_cacheKey('trades_v1'), data.trades);
-      if (data.notes && Object.keys(data.notes).length > 0)
-        lsSet(_cacheKey('notes_v1'), data.notes);
-      console.log('[sync] Data loaded from server ✅');
+    if (!data || typeof data !== 'object') return;
+
+    // Merge strategy: server data + local data combine karo
+    // Local data ko priority do (user ne abhi kuch add kiya hoga)
+    const localWl     = wlGetAll();
+    const localTrades = tradesGetAll();
+    const localNotes  = lsGet(_cacheKey('notes_v1'), {});
+
+    // Server se data lo agar local empty hai
+    if (data.watchlist && Object.keys(data.watchlist).length > 0) {
+      const merged = { ...data.watchlist, ...localWl }; // local overrides server
+      lsSet(_cacheKey('wl_v1'), merged);
     }
-  } catch(e) { console.log('[sync] Server load failed (using local cache):', e.message); }
+    if (data.trades && Object.keys(data.trades).length > 0) {
+      const merged = { ...data.trades, ...localTrades }; // local overrides server
+      lsSet(_cacheKey('trades_v1'), merged);
+    }
+    if (data.notes && Object.keys(data.notes).length > 0) {
+      const merged = { ...data.notes, ...localNotes }; // local overrides server
+      lsSet(_cacheKey('notes_v1'), merged);
+    }
+
+    // Ab local data server pe bhi save karo (sync)
+    _syncToServer();
+    console.log('[sync] Data merged from server ✅');
+  } catch(e) {
+    console.log('[sync] Server load failed (using local cache):', e.message);
+  }
 }
 
 // ── Notes Tab ──────────────────────────────────
@@ -1871,7 +1901,6 @@ function openAnalysisPanel(title) {
       <div class="spinner"></div>
       <div>Stock data fetch ho rahi hai — <b>${escHTML(title)}</b></div>
     </div>`;
-  // Show indices in rpanel while loading
   document.getElementById('rpanel-indices').style.display = 'block';
   document.getElementById('rpanel-news').style.display = 'none';
 }
@@ -1880,6 +1909,9 @@ function closeAnalysis() {
   document.getElementById('analysis-panel').style.display = 'none';
   currentData = null; currentSym = null; currentUrl = null;
   if (currentPriceChart) { currentPriceChart.destroy(); currentPriceChart = null; }
+  // Restore previous page hash
+  const prev = sessionStorage.getItem('prev_hash') || 'home';
+  history.replaceState(null, '', '#' + prev);
 }
 
 // ── Panel Search (search bar inside analysis panel) ──
