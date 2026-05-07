@@ -157,7 +157,7 @@ function showPage(page) {
   }
 
   if (page === 'market')    loadMarket('gainers');
-  if (page === 'screener')  loadScreenerList();
+  if (page === 'screener')  initScreenerPage();
   if (page === 'watchlist') loadWatchlist();
   if (page === 'etf')       loadEtf('list');
   if (page === 'ipo')       loadIpo();
@@ -2358,3 +2358,299 @@ function escHTML(str) {
 document.addEventListener('click', e => {
   if (!e.target.closest('.search-wrap')) closeDropdown();
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SCREENER.IN — My Screens + Explore + ChartInk tabs
+// ══════════════════════════════════════════════════════════════════════════════
+
+let _activeScreenerTab = 'myScreens';
+let _activeMyScreen    = 'swing';
+let _screenerPollTimer = null;
+
+function initScreenerPage() {
+  switchScreenerTab('myScreens');
+}
+
+function switchScreenerTab(tab, btn) {
+  _activeScreenerTab = tab;
+  // Hide all tabs
+  ['myScreens','explore','chartink'].forEach(t => {
+    const el = document.getElementById('screener-tab-' + t);
+    if (el) el.style.display = 'none';
+  });
+  // Show selected
+  const active = document.getElementById('screener-tab-' + tab);
+  if (active) active.style.display = '';
+
+  // Update pill buttons
+  document.querySelectorAll('#screener-tabs .pill').forEach(p => p.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  else {
+    const pills = document.querySelectorAll('#screener-tabs .pill');
+    const idx = ['myScreens','explore','chartink'].indexOf(tab);
+    if (idx >= 0 && pills[idx]) pills[idx].classList.add('active');
+  }
+
+  if (tab === 'myScreens') {
+    loadMyScreen(_activeMyScreen);
+    pollScreenerStatus();
+  } else if (tab === 'explore') {
+    loadExploreGrid();
+  } else if (tab === 'chartink') {
+    loadScreenerList();
+  }
+}
+
+// ── My Screens (Swing / Positional / Long Term) ───────────────────────────────
+
+async function loadMyScreen(type, btn) {
+  _activeMyScreen = type;
+
+  // Update column header buttons
+  ['swing','positional','longterm'].forEach(t => {
+    const b = document.getElementById('scol-' + t);
+    if (b) b.classList.toggle('active', t === type);
+  });
+
+  const container = document.getElementById('my-screen-result');
+  container.innerHTML = '<div class="loading-box">⏳ Loading results...</div>';
+
+  try {
+    const res  = await fetch('/api/screener/results');
+    const data = await res.json();
+
+    const stocks = data[type] || [];
+    const ts     = data.timestamp;
+
+    // Update status bar
+    const tsEl = document.getElementById('screener-last-scan');
+    if (tsEl && ts) {
+      const d = new Date(ts);
+      tsEl.textContent = `Last scan: ${d.toLocaleDateString('en-IN')} ${d.toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit'})}`;
+    }
+
+    if (!stocks.length) {
+      container.innerHTML = `
+        <div class="loading-box" style="flex-direction:column;gap:12px">
+          <div>📭 Koi results nahi hain</div>
+          <div style="color:var(--subtext);font-size:13px">Pehle "Refresh Scan" click karo — screener.in se data fetch hoga</div>
+          <button class="btn-scan" onclick="startScreenerScan()">🔄 Start Scan</button>
+        </div>`;
+      return;
+    }
+
+    container.innerHTML = renderScreenerTable(stocks, type);
+  } catch(e) {
+    container.innerHTML = `<div class="loading-box" style="color:var(--red)">❌ ${escHTML(e.message)}</div>`;
+  }
+}
+
+function renderScreenerTable(stocks, type) {
+  const typeLabels = {
+    swing:      { icon:'⚡', label:'Swing', color:'var(--accent)' },
+    positional: { icon:'📈', label:'Positional', color:'var(--yellow)' },
+    longterm:   { icon:'🏆', label:'Long Term', color:'var(--green)' },
+  };
+  const info = typeLabels[type] || { icon:'🔍', label:type, color:'var(--accent)' };
+
+  // Detect which columns are available
+  const sample = stocks[0] || {};
+  const hasCols = {
+    price:    sample.current_price != null,
+    mcap:     sample.market_cap    != null,
+    roe:      sample.roe           != null,
+    roce:     sample.roce          != null,
+    pe:       sample.pe            != null,
+    de:       sample.debt_to_equity!= null,
+    promo:    sample.promoter_holding != null,
+    pg5y:     sample.profit_growth_5y != null,
+  };
+
+  const fmtVal = (v, suffix='') => v != null ? `${fmtNum(v)}${suffix}` : '<span style="color:#444">—</span>';
+  const colorPct = (v) => {
+    if (v == null) return '<span style="color:#444">—</span>';
+    const cls = v >= 0 ? 'up-col' : 'dn-col';
+    return `<span class="${cls}">${v >= 0 ? '+' : ''}${fmtNum(v)}%</span>`;
+  };
+  const colorRatio = (v, good, bad) => {
+    if (v == null) return '<span style="color:#444">—</span>';
+    const cls = v <= bad ? 'dn-col' : v <= good ? '' : 'up-col';
+    return `<span class="${cls}">${fmtNum(v)}</span>`;
+  };
+
+  return `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+      <div class="section-hdr" style="margin:0;color:${info.color}">${info.icon} ${info.label} — ${stocks.length} stocks</div>
+      <div style="font-size:12px;color:var(--subtext)">Click on any stock to analyze</div>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="market-table screener-in-table">
+        <thead><tr>
+          <th>#</th>
+          <th>Symbol</th>
+          <th>Company</th>
+          ${hasCols.price ? '<th>CMP ₹</th>' : ''}
+          ${hasCols.mcap  ? '<th>Mkt Cap</th>' : ''}
+          ${hasCols.roe   ? '<th>ROE %</th>' : ''}
+          ${hasCols.roce  ? '<th>ROCE %</th>' : ''}
+          ${hasCols.pe    ? '<th>P/E</th>' : ''}
+          ${hasCols.de    ? '<th>D/E</th>' : ''}
+          ${hasCols.promo ? '<th>Promo %</th>' : ''}
+          ${hasCols.pg5y  ? '<th>Profit 5Y %</th>' : ''}
+          <th>Action</th>
+        </tr></thead>
+        <tbody>
+          ${stocks.map((s, i) => {
+            const sym  = s.symbol || '';
+            const name = (s.name || sym).substring(0, 28);
+            return `<tr onclick="quickLoad('${escHTML(sym)}')" style="cursor:pointer">
+              <td style="color:var(--subtext)">${i+1}</td>
+              <td class="sym-col">${escHTML(sym)}</td>
+              <td style="color:var(--subtext);font-size:12px" title="${escHTML(s.name||'')}">
+                ${escHTML(name)}${(s.name||'').length > 28 ? '…' : ''}
+              </td>
+              ${hasCols.price ? `<td style="font-weight:600">₹${fmtVal(s.current_price)}</td>` : ''}
+              ${hasCols.mcap  ? `<td style="color:var(--subtext)">${s.market_cap != null ? fmtCr(s.market_cap) : '—'}</td>` : ''}
+              ${hasCols.roe   ? `<td>${colorPct(s.roe)}</td>` : ''}
+              ${hasCols.roce  ? `<td>${colorPct(s.roce)}</td>` : ''}
+              ${hasCols.pe    ? `<td>${fmtVal(s.pe)}</td>` : ''}
+              ${hasCols.de    ? `<td>${colorRatio(s.debt_to_equity, 1, 2)}</td>` : ''}
+              ${hasCols.promo ? `<td>${fmtVal(s.promoter_holding, '%')}</td>` : ''}
+              ${hasCols.pg5y  ? `<td>${colorPct(s.profit_growth_5y)}</td>` : ''}
+              <td>
+                <button class="btn-sm" onclick="event.stopPropagation();quickLoad('${escHTML(sym)}')"
+                  style="padding:3px 8px;font-size:11px">📊 Analyze</button>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function fmtCr(v) {
+  if (v == null) return '—';
+  if (v >= 100000) return `${(v/100000).toFixed(1)}L Cr`;
+  if (v >= 1000)   return `${(v/1000).toFixed(1)}K Cr`;
+  return `${fmtNum(v)} Cr`;
+}
+
+async function startScreenerScan() {
+  const btn = document.getElementById('btn-start-scan');
+  const statusText = document.getElementById('screener-status-text');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Starting...'; }
+
+  try {
+    const res  = await fetch('/api/screener/start', { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      if (statusText) statusText.textContent = '🔄 Scan started...';
+      pollScreenerStatus();
+    } else {
+      if (statusText) statusText.textContent = '⚠️ ' + (data.message || 'Could not start');
+      if (btn) { btn.disabled = false; btn.textContent = '🔄 Refresh Scan'; }
+    }
+  } catch(e) {
+    if (statusText) statusText.textContent = '❌ Error: ' + e.message;
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Refresh Scan'; }
+  }
+}
+
+async function pollScreenerStatus() {
+  clearTimeout(_screenerPollTimer);
+  try {
+    const res  = await fetch('/api/screener/status');
+    const prog = await res.json();
+    const statusText = document.getElementById('screener-status-text');
+    const btn        = document.getElementById('btn-start-scan');
+
+    if (prog.cookies_ok === false) {
+      if (statusText) statusText.innerHTML = '❌ Screener.in cookies expired — <code>screener_scraper.py</code> mein update karo';
+      if (btn) { btn.disabled = false; btn.textContent = '🔄 Refresh Scan'; }
+      return;
+    }
+
+    if (prog.running) {
+      const pct = prog.total > 0 ? Math.round(prog.done / prog.total * 100) : 0;
+      if (statusText) statusText.textContent = `🔄 ${prog.message || 'Scanning...'} (${pct}%)`;
+      if (btn) { btn.disabled = true; btn.textContent = '⏳ Scanning...'; }
+      _screenerPollTimer = setTimeout(pollScreenerStatus, 2000);
+    } else {
+      if (prog.status === 'done') {
+        if (statusText) statusText.textContent = '✅ ' + (prog.message || 'Scan complete');
+        loadMyScreen(_activeMyScreen);
+      } else if (prog.status === 'error') {
+        if (statusText) statusText.textContent = '❌ ' + (prog.message || 'Error');
+      } else {
+        if (statusText) statusText.textContent = '💤 Idle — click Refresh Scan to fetch latest data';
+      }
+      if (btn) { btn.disabled = false; btn.textContent = '🔄 Refresh Scan'; }
+    }
+  } catch(e) {
+    clearTimeout(_screenerPollTimer);
+  }
+}
+
+// ── Explore Screens ───────────────────────────────────────────────────────────
+
+const EXPLORE_ICONS = {
+  piotroski:      '🏅', magic_formula:  '✨', coffee_can:     '☕',
+  quarterly_grow: '📈', fii_buying:     '🏦', bull_cartel:    '🐂',
+  darvas:         '📦', golden_cross:   '✝️', capacity_exp:   '🏗️',
+  debt_reduction: '📉', new_high:       '🚀', rsi_oversold:   '📊',
+  growth_nodilute:'🌱', price_volume:   '⚡', chatgpt_swing:  '🤖',
+  chatgpt_pos:    '🤖', chatgpt_lt:     '🤖', claude_swing:   '🔵',
+  claude_pos:     '🔵', claude_lt:      '🔵', fund_swing:     '💎',
+  fund_lt:        '💎',
+};
+
+async function loadExploreGrid() {
+  const grid = document.getElementById('explore-grid');
+  grid.innerHTML = '<div class="loading-box">⏳ Loading explore screens...</div>';
+  try {
+    const res     = await fetch('/api/screener/explore');
+    const screens = await res.json();
+    grid.innerHTML = screens.map(s =>
+      `<div class="explore-card" onclick="loadExploreScreen('${escHTML(s.key)}', this)">
+        <div class="ec-icon">${EXPLORE_ICONS[s.key] || '🔍'}</div>
+        <div class="ec-label">${escHTML(s.label)}</div>
+      </div>`
+    ).join('');
+  } catch(e) {
+    grid.innerHTML = `<div class="loading-box" style="color:var(--red)">❌ ${escHTML(e.message)}</div>`;
+  }
+}
+
+async function loadExploreScreen(key, cardEl) {
+  // Highlight selected card
+  document.querySelectorAll('.explore-card').forEach(c => c.classList.remove('active'));
+  if (cardEl) cardEl.classList.add('active');
+
+  const result = document.getElementById('explore-result');
+  result.innerHTML = '<div class="loading-box">⏳ Fetching from screener.in...</div>';
+  result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  try {
+    const res  = await fetch(`/api/screener/explore/${encodeURIComponent(key)}`);
+    const data = await res.json();
+
+    if (data.error) {
+      result.innerHTML = `<div class="loading-box" style="color:var(--red)">❌ ${escHTML(data.error)}</div>`;
+      return;
+    }
+
+    const stocks = data.stocks || [];
+    if (!stocks.length) {
+      result.innerHTML = '<div class="loading-box">📭 Koi stocks nahi mile is screen mein</div>';
+      return;
+    }
+
+    result.innerHTML = renderScreenerTable(stocks, 'explore_' + key);
+    // Fix header label for explore
+    const hdr = result.querySelector('.section-hdr');
+    if (hdr) hdr.innerHTML = `${EXPLORE_ICONS[key] || '🔍'} ${escHTML(data.label)} — ${stocks.length} stocks`;
+
+  } catch(e) {
+    result.innerHTML = `<div class="loading-box" style="color:var(--red)">❌ ${escHTML(e.message)}</div>`;
+  }
+}

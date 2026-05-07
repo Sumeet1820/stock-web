@@ -19,6 +19,22 @@ from stock_analyzer_v34 import (
     NSE_SESSION,
 )
 
+# ── Screener.in saved screens integration ─────────────────────────────────────
+from screener import (
+    run_screener as _run_screener_in,
+    load_results as _load_screener_results,
+    get_progress as _get_screener_progress,
+    results_are_fresh as _screener_results_fresh,
+    _set_progress as _set_screener_progress,
+)
+from screener_scraper import (
+    EXPLORE_SCREENS,
+    fetch_explore_screen,
+    cookies_valid as _screener_cookies_valid,
+)
+_screener_thread_lock = threading.Lock()
+_explore_cache = {}  # key → {'data': [...], 'ts': datetime}
+
 from flask import Flask, jsonify, render_template, request, session, redirect, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
 import requests as _req
@@ -1307,6 +1323,71 @@ def api_sparkline(sym):
         closes=hist['Close'].dropna().values.astype(float).tolist()
         return jsonify([round(c,2) for c in closes])
     except: return jsonify([])
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SCREENER.IN SAVED SCREENS — Swing / Positional / Long Term + Explore
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/screener/status')
+def api_screener_status():
+    """Screener progress + cookie status"""
+    prog = _get_screener_progress()
+    prog['cookies_ok'] = _screener_cookies_valid()
+    return jsonify(prog)
+
+@app.route('/api/screener/results')
+def api_screener_results():
+    """Return cached screener results (swing/positional/longterm)"""
+    results = _load_screener_results()
+    if not results:
+        return jsonify({'swing': [], 'positional': [], 'longterm': [],
+                        'timestamp': None, 'total_scanned': 0})
+    return jsonify(results)
+
+@app.route('/api/screener/start', methods=['POST'])
+def api_screener_start():
+    """Start a fresh screener.in scan in background"""
+    prog = _get_screener_progress()
+    if prog.get('running'):
+        return jsonify({'ok': False, 'message': 'Scan already running'})
+
+    def _run():
+        _run_screener_in()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return jsonify({'ok': True, 'message': 'Scan started'})
+
+@app.route('/api/screener/explore')
+def api_screener_explore_list():
+    """List all available explore screens"""
+    screens = []
+    for key, (label, url) in EXPLORE_SCREENS.items():
+        screens.append({'key': key, 'label': label, 'url': url})
+    return jsonify(screens)
+
+@app.route('/api/screener/explore/<key>')
+def api_screener_explore_fetch(key):
+    """Fetch a specific explore screen (cached 6h)"""
+    import datetime as _dt
+    if key not in EXPLORE_SCREENS:
+        return jsonify({'error': f'Unknown screen: {key}'}), 404
+
+    # Check cache
+    cached = _explore_cache.get(key)
+    if cached:
+        age = (_dt.datetime.now() - cached['ts']).total_seconds()
+        if age < 6 * 3600:
+            return jsonify({'key': key, 'label': EXPLORE_SCREENS[key][0],
+                            'stocks': cached['data'], 'cached': True})
+
+    stocks = fetch_explore_screen(key)
+    if stocks is None:
+        return jsonify({'error': 'Screener.in cookies expired — screener_scraper.py mein update karo'}), 503
+
+    _explore_cache[key] = {'data': stocks, 'ts': _dt.datetime.now()}
+    return jsonify({'key': key, 'label': EXPLORE_SCREENS[key][0],
+                    'stocks': stocks, 'cached': False})
 
 # ── Keep-Alive ping endpoint ──────────────────────────────────────────────────
 @app.route('/ping')

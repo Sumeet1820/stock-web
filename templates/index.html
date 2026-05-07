@@ -127,13 +127,67 @@
     <!-- ── SCREENER PAGE ── -->
     <div class="page" id="page-screener">
       <div class="page-header">
-        <h2>🔍 Chartink Screeners</h2>
-        <span class="page-sub">Pre-built trading screeners</span>
+        <h2>🔍 Stock Screeners</h2>
+        <div class="tab-pills" id="screener-tabs">
+          <button class="pill active" onclick="switchScreenerTab('myScreens', this)">📊 My Screens</button>
+          <button class="pill" onclick="switchScreenerTab('explore', this)">🌐 Explore</button>
+          <button class="pill" onclick="switchScreenerTab('chartink', this)">⚡ ChartInk</button>
+        </div>
       </div>
-      <div class="screener-grid" id="screener-list">
-        <div class="loading-box">⏳ Loading screeners...</div>
+
+      <!-- MY SCREENS TAB -->
+      <div id="screener-tab-myScreens">
+        <!-- 3 column header buttons -->
+        <div class="screener-col-header">
+          <button class="scol-btn active" id="scol-swing" onclick="loadMyScreen('swing', this)">
+            <span class="scol-icon">⚡</span>
+            <span class="scol-title">Swing</span>
+            <span class="scol-sub">Short Term</span>
+          </button>
+          <button class="scol-btn" id="scol-positional" onclick="loadMyScreen('positional', this)">
+            <span class="scol-icon">📈</span>
+            <span class="scol-title">Positional</span>
+            <span class="scol-sub">Medium Term</span>
+          </button>
+          <button class="scol-btn" id="scol-longterm" onclick="loadMyScreen('longterm', this)">
+            <span class="scol-icon">🏆</span>
+            <span class="scol-title">Long Term</span>
+            <span class="scol-sub">Value Investing</span>
+          </button>
+        </div>
+
+        <!-- Scan controls -->
+        <div class="screener-controls">
+          <div class="screener-status-bar" id="screener-status-bar">
+            <span id="screener-status-text">⏳ Loading...</span>
+            <span id="screener-last-scan"></span>
+          </div>
+          <button class="btn-scan" id="btn-start-scan" onclick="startScreenerScan()">
+            🔄 Refresh Scan
+          </button>
+        </div>
+
+        <!-- Results table -->
+        <div id="my-screen-result">
+          <div class="loading-box">⏳ Loading screener results...</div>
+        </div>
       </div>
-      <div id="screener-result"></div>
+
+      <!-- EXPLORE TAB -->
+      <div id="screener-tab-explore" style="display:none">
+        <div class="explore-grid" id="explore-grid">
+          <div class="loading-box">⏳ Loading explore screens...</div>
+        </div>
+        <div id="explore-result"></div>
+      </div>
+
+      <!-- CHARTINK TAB -->
+      <div id="screener-tab-chartink" style="display:none">
+        <div class="screener-grid" id="screener-list">
+          <div class="loading-box">⏳ Loading screeners...</div>
+        </div>
+        <div id="screener-result"></div>
+      </div>
     </div>
 
     <!-- ── WATCHLIST PAGE ── -->
