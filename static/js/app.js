@@ -59,15 +59,17 @@ async function setupAuth(callback) {
       const hash = window.location.hash.replace('#', '');
       const validPages = ['home','market','screener','watchlist','etf','ipo'];
       const homeTabs   = ['tradelog','broad','sectoral','thematic','strategy'];
+      const marketTabs = ['gainers','losers','volume','active','52high','52low'];
+      const etfTabs    = ['list','screener','rsi','scanner'];
+      const scrTabs    = ['myScreens','explore','chartink'];
+      const scrMyTabs  = ['swing','positional','longterm'];
 
       if (hash.startsWith('stock-sym-')) {
-        // Refresh on stock page — reload same stock
         const sym = decodeURIComponent(hash.replace('stock-sym-', ''));
         callback();
         setTimeout(() => loadStockBySymbol(sym), 100);
         return;
       } else if (hash.startsWith('stock-url-')) {
-        // Refresh on stock page (URL based)
         const url = decodeURIComponent(hash.replace('stock-url-', ''));
         callback();
         setTimeout(() => loadStockByUrl(url, ''), 100);
@@ -79,6 +81,38 @@ async function setupAuth(callback) {
           setTimeout(() => switchHomeTab(tab), 50);
           return;
         }
+      } else if (hash.startsWith('market-')) {
+        const tab = hash.replace('market-', '');
+        if (marketTabs.includes(tab)) {
+          callback();
+          setTimeout(() => { showPageOnly('market'); loadMarket(tab); }, 50);
+          return;
+        }
+      } else if (hash.startsWith('etf-')) {
+        const tab = hash.replace('etf-', '');
+        if (etfTabs.includes(tab)) {
+          callback();
+          setTimeout(() => { showPageOnly('etf'); loadEtf(tab); }, 50);
+          return;
+        }
+      } else if (hash.startsWith('screener-my-')) {
+        const myTab = hash.replace('screener-my-', '');
+        if (scrMyTabs.includes(myTab)) {
+          callback();
+          setTimeout(() => { showPageOnly('screener'); switchScreenerTab('myScreens'); loadMyScreen(myTab); }, 50);
+          return;
+        }
+      } else if (hash.startsWith('screener-')) {
+        const tab = hash.replace('screener-', '');
+        if (scrTabs.includes(tab)) {
+          callback();
+          setTimeout(() => { showPageOnly('screener'); switchScreenerTab(tab); }, 50);
+          return;
+        }
+      } else if (hash === 'ipo') {
+        callback();
+        setTimeout(() => showPage('ipo'), 50);
+        return;
       } else if (hash && validPages.includes(hash) && hash !== 'home') {
         callback();
         setTimeout(() => showPage(hash), 50);
@@ -148,7 +182,7 @@ function showPage(page) {
   document.getElementById('nav-' + page).classList.add('active');
 
   history.replaceState(null, '', '#' + page);
-  sessionStorage.setItem('prev_hash', page); // for closeAnalysis restore
+  sessionStorage.setItem('prev_hash', page);
 
   if (window.innerWidth <= 900) {
     document.getElementById('sidebar').classList.remove('open');
@@ -161,6 +195,19 @@ function showPage(page) {
   if (page === 'watchlist') loadWatchlist();
   if (page === 'etf')       loadEtf('list');
   if (page === 'ipo')       loadIpo();
+}
+
+// showPageOnly — sirf page switch karo, content load mat karo (restore ke liye)
+function showPageOnly(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  document.getElementById('nav-' + page).classList.add('active');
+  if (window.innerWidth <= 900) {
+    document.getElementById('sidebar').classList.remove('open');
+    const ov = document.getElementById('sidebar-overlay');
+    if (ov) ov.classList.remove('show');
+  }
 }
 
 function switchHomeTab(tab, btn) {
@@ -1197,10 +1244,18 @@ async function fetchTlPnl(trade, idx) {
 
 // ── Market ─────────────────────────────────────
 async function loadMarket(type, btn) {
+  // Highlight correct pill — works both on click (btn passed) and on restore (btn null)
+  document.querySelectorAll('#market-tabs .pill').forEach(b => b.classList.remove('active'));
   if (btn) {
-    document.querySelectorAll('#market-tabs .pill').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
+  } else {
+    const typeMap = { gainers:0, losers:1, volume:2, active:3, '52high':4, '52low':5 };
+    const pills = document.querySelectorAll('#market-tabs .pill');
+    const idx = typeMap[type];
+    if (idx !== undefined && pills[idx]) pills[idx].classList.add('active');
   }
+  history.replaceState(null, '', '#market-' + type);
+  sessionStorage.setItem('prev_hash', 'market-' + type);
 
   const cont = document.getElementById('market-content');
   cont.innerHTML = '<div class="loading-box">⏳ NSE se data fetch ho rahi hai... (10-15 sec)</div>';
@@ -1421,10 +1476,19 @@ function runScreenerSort(slug, key, dir) {
 
 // ── ETF ────────────────────────────────────────
 async function loadEtf(type, btn) {
+  // Highlight correct pill — works on click and on restore
+  document.querySelectorAll('#page-etf .pill').forEach(b => b.classList.remove('active'));
   if (btn) {
-    document.querySelectorAll('#page-etf .pill').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
+  } else {
+    const typeMap = { list:0, screener:1, rsi:2, scanner:3 };
+    const pills = document.querySelectorAll('#page-etf .pill');
+    const idx = typeMap[type];
+    if (idx !== undefined && pills[idx]) pills[idx].classList.add('active');
   }
+  history.replaceState(null, '', '#etf-' + type);
+  sessionStorage.setItem('prev_hash', 'etf-' + type);
+
   const cont = document.getElementById('etf-content');
 
   // RSI Screener tab
@@ -2373,16 +2437,13 @@ function initScreenerPage() {
 
 function switchScreenerTab(tab, btn) {
   _activeScreenerTab = tab;
-  // Hide all tabs
   ['myScreens','explore','chartink'].forEach(t => {
     const el = document.getElementById('screener-tab-' + t);
     if (el) el.style.display = 'none';
   });
-  // Show selected
   const active = document.getElementById('screener-tab-' + tab);
   if (active) active.style.display = '';
 
-  // Update pill buttons
   document.querySelectorAll('#screener-tabs .pill').forEach(p => p.classList.remove('active'));
   if (btn) btn.classList.add('active');
   else {
@@ -2390,6 +2451,9 @@ function switchScreenerTab(tab, btn) {
     const idx = ['myScreens','explore','chartink'].indexOf(tab);
     if (idx >= 0 && pills[idx]) pills[idx].classList.add('active');
   }
+
+  history.replaceState(null, '', '#screener-' + tab);
+  sessionStorage.setItem('prev_hash', 'screener-' + tab);
 
   if (tab === 'myScreens') {
     loadMyScreen(_activeMyScreen);
@@ -2406,11 +2470,13 @@ function switchScreenerTab(tab, btn) {
 async function loadMyScreen(type, btn) {
   _activeMyScreen = type;
 
-  // Update column header buttons
   ['swing','positional','longterm'].forEach(t => {
     const b = document.getElementById('scol-' + t);
     if (b) b.classList.toggle('active', t === type);
   });
+
+  history.replaceState(null, '', '#screener-my-' + type);
+  sessionStorage.setItem('prev_hash', 'screener-my-' + type);
 
   const container = document.getElementById('my-screen-result');
   container.innerHTML = '<div class="loading-box">⏳ Loading results...</div>';
