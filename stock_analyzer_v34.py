@@ -386,13 +386,13 @@ def scrape_screener(url):
                 if not vals: continue
                 if 'promoters' in label:
                     d['promoter_holding'] = vals[-1]
-                    if len(vals) >= 2: d['promoter_holding_prev'] = vals[0]
+                    if len(vals) >= 2: d['promoter_holding_prev'] = vals[-2]  # previous quarter, not oldest
                 elif 'fii' in label or 'foreign' in label:
                     d['fii_holding'] = vals[-1]
-                    if len(vals) >= 2: d['_fii_prev'] = vals[0]
+                    if len(vals) >= 2: d['_fii_prev'] = vals[-2]
                 elif 'dii' in label or 'domestic' in label:
                     d['dii_holding'] = vals[-1]
-                    if len(vals) >= 2: d['_dii_prev'] = vals[0]
+                    if len(vals) >= 2: d['_dii_prev'] = vals[-2]
                 elif 'pledg' in label:
                     d['pledged'] = vals[-1]
     if d['pledged'] is None and d['promoter_holding'] is not None:
@@ -403,6 +403,19 @@ def scrape_screener(url):
     if pl:
         mode = None
         rev_all = []; prf_all = []
+
+        # Detect if last column is TTM — use it as "latest", else use second-to-last
+        # TTM = trailing twelve months (most current), Mar YYYY = full year
+        _pl_header = pl.select_one('table tr')
+        _pl_cols = [c.get_text(strip=True).upper() for c in _pl_header.select('td,th')] if _pl_header else []
+        _has_ttm = 'TTM' in _pl_cols
+        # latest_idx: -1 if TTM present, else -2 (skip current incomplete year)
+        # But if only 1-2 cols, just use -1
+        def _latest(valid):
+            if len(valid) == 0: return None
+            if len(valid) == 1: return valid[-1]
+            return valid[-1] if _has_ttm else valid[-2]
+
         for row in pl.select('table tr'):
             cells = row.select('td, th')
             if not cells: continue
@@ -433,23 +446,23 @@ def scrape_screener(url):
             # Net profit
             elif label in ('net profit+','net profit','profit after tax'):
                 if d['net_profit'] is None:
-                    d['net_profit'] = valid[-2] if len(valid)>=2 else valid[-1]
+                    d['net_profit'] = _latest(valid)
                 prf_all = [n for n in nums if n is not None]
             # Operating profit
             elif label in ('operating profit','operating profit+','ebit','ebitda'):
-                d['operating_profit_annual'] = valid[-2] if len(valid)>=2 else valid[-1]
+                d['operating_profit_annual'] = _latest(valid)
             # OPM %
             elif label == 'opm %':
                 if d['operating_margin'] is None:
-                    d['operating_margin'] = valid[-2] if len(valid)>=2 else valid[-1]
+                    d['operating_margin'] = _latest(valid)
             # Interest
             elif label in ('interest','finance cost','finance costs','interest expense'):
                 if d['interest_annual'] is None:
-                    d['interest_annual'] = valid[-2] if len(valid)>=2 else valid[-1]
+                    d['interest_annual'] = _latest(valid)
             # Net margin
             elif 'net profit %' in label or label == 'npm %':
                 if d['net_margin'] is None:
-                    d['net_margin'] = valid[-2] if len(valid)>=2 else valid[-1]
+                    d['net_margin'] = _latest(valid)
 
         # Interest Coverage (only if not from quick-ratio)
         if d['interest_coverage'] is None:
@@ -573,9 +586,129 @@ def fetch_stock(base_url):
     try:
         data = scrape_screener(base + '/consolidated/')
         if data.get('market_cap') is not None:
-            return data
+            return _enrich_with_yfinance(data)
     except: pass
-    return scrape_screener(base + '/')
+    return _enrich_with_yfinance(scrape_screener(base + '/'))
+
+
+def _enrich_with_yfinance(d):
+    """
+    Screener.in bina fresh login ke incomplete data deta hai.
+    yfinance se missing/wrong fields fill karo.
+    Fields fixed: pe, net_profit, current_ratio, interest_coverage,
+                  net_margin, operating_margin, debt_to_equity, roe, roce
+    """
+    import math
+
+    sym = d.get('nse_symbol') or ''
+    if not sym:
+        return d
+
+    try:
+        import yfinance as yf
+        t    = yf.Ticker(f"{sym}.NS")
+        info = t.info  # one call — all fields
+
+        def _f(key):
+            v = info.get(key)
+            try:
+                f = float(v)
+                return None if (math.isnan(f) or math.isinf(f)) else f
+            except: return None
+
+        # ── P/E — always overwrite with yfinance trailing PE ──────────────
+        pe = _f('trailingPE')
+        if pe and 0 < pe < 5000:
+            d['pe'] = round(pe, 1)
+        else:
+            eps = _f('trailingEps')
+            price = d.get('current_price') or _f('currentPrice') or _f('regularMarketPrice')
+            if eps and eps > 0 and price and price > 0:
+                d['pe'] = round(price / eps, 1)
+
+        # ── Net Profit (annual TTM, in Cr) ────────────────────────────────
+        ni = _f('netIncomeToCommon')
+        if ni and ni > 0:
+            ni_cr = round(ni / 1e7, 2)   # ₹ → Cr
+            scr_np = d.get('net_profit')
+            # Only overwrite if screener gave no data or clearly stale (>3x difference)
+            if scr_np is None or scr_np <= 0:
+                d['net_profit'] = ni_cr
+            elif ni_cr > 0 and (scr_np > ni_cr * 3 or scr_np < ni_cr * 0.33):
+                # Screener value is >3x or <1/3 of yfinance — clearly stale
+                d['net_profit'] = ni_cr
+
+        # ── Current Ratio ─────────────────────────────────────────────────
+        cr = _f('currentRatio')
+        # Fallback: calculate from balance sheet if fast_info doesn't have it
+        if not cr:
+            try:
+                bs_df = t.balance_sheet
+                if bs_df is not None and not bs_df.empty:
+                    ca = cl = None
+                    for idx in bs_df.index:
+                        il = str(idx).lower()
+                        if 'current assets' in il and 'other' not in il and 'net' not in il:
+                            ca = float(bs_df.loc[idx].iloc[0])
+                        elif 'current liabilities' in il and 'other' not in il:
+                            cl = float(bs_df.loc[idx].iloc[0])
+                    if ca and cl and cl > 0:
+                        cr = round(ca / cl, 2)
+            except: pass
+
+        if cr and cr > 0:
+            scr_cr = d.get('current_ratio')
+            # Use yfinance if screener has no data, or if they differ by >30%
+            if scr_cr is None or scr_cr <= 0 or scr_cr > 50:
+                d['current_ratio'] = round(cr, 2)
+            elif cr > 0 and abs(scr_cr - cr) / cr > 0.3:
+                d['current_ratio'] = round(cr, 2)
+
+        # ── Debt to Equity ────────────────────────────────────────────────
+        # Skip yfinance D/E — it uses % format and often differs from screener
+        # Screener.in value is more reliable for Indian stocks
+
+        # ── Interest Coverage ─────────────────────────────────────────────
+        # Use yfinance only when screener has no data
+        if d.get('interest_coverage') is None:
+            try:
+                fin = t.financials
+                if fin is not None and not fin.empty:
+                    ebit = interest_exp = None
+                    for idx in fin.index:
+                        il = str(idx).lower()
+                        if il == 'ebit':
+                            ebit = float(fin.loc[idx].iloc[0])
+                        elif 'interest expense non operating' in il:
+                            interest_exp = abs(float(fin.loc[idx].iloc[0]))
+                    if ebit and interest_exp and interest_exp > 0:
+                        d['interest_coverage'] = round(ebit / interest_exp, 1)
+            except: pass
+
+        # ── ROE / ROCE ────────────────────────────────────────────────────
+        roe = _f('returnOnEquity')
+        if roe and d.get('roe') is None:
+            d['roe'] = round(roe * 100, 2)
+
+        # ── Net Margin ────────────────────────────────────────────────────
+        npm = _f('profitMargins')
+        if npm and d.get('net_margin') is None:
+            d['net_margin'] = round(npm * 100, 2)
+
+        # ── Operating Margin ──────────────────────────────────────────────
+        opm = _f('operatingMargins')
+        if opm and d.get('operating_margin') is None:
+            d['operating_margin'] = round(opm * 100, 2)
+
+        # ── EPS ───────────────────────────────────────────────────────────
+        eps = _f('trailingEps')
+        if eps and d.get('eps') is None:
+            d['eps'] = round(eps, 2)
+
+    except Exception as ex:
+        print(f"[yfinance enrich] {sym}: {ex}")
+
+    return d
 
 def search_stock(query):
     r = SESSION.get(
