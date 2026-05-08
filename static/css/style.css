@@ -1110,6 +1110,16 @@ body {
   font-size: 13px;
 }
 .trade-log-table tr:hover td { background: var(--card2); }
+
+/* Total row in trade log */
+.tl-total-row td {
+  background: rgba(77,142,255,0.08) !important;
+  border-top: 2px solid var(--accent);
+  border-bottom: none;
+  padding: 12px 12px;
+  font-size: 13px;
+}
+.tl-total-row:hover td { background: rgba(77,142,255,0.12) !important; }
 .trade-log-empty {
   text-align: center;
   padding: 60px 20px;

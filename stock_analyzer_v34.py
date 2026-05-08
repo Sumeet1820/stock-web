@@ -728,7 +728,10 @@ def fetch_nse_live(symbol):
         ti = d.get('marketDeptOrderBook', {}).get('tradeInfo', {})
         result = {
             'ltp':            pi.get('lastPrice'),
+            'change':         pi.get('change'),
             'change_pct':     pi.get('pChange'),
+            'prev_close':     pi.get('previousClose'),
+            'open':           pi.get('open'),
             'high':           pi.get('intraDayHighLow', {}).get('max'),
             'low':            pi.get('intraDayHighLow', {}).get('min'),
             'week52_high':    pi.get('weekHighLow', {}).get('max'),

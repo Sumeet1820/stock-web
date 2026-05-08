@@ -1133,13 +1133,17 @@ function renderTradeLog() {
     return;
   }
 
+  const totalInvested = trades
+    .filter(t => t.type === 'BUY')
+    .reduce((s, t) => s + (parseFloat(t.price)||0) * (parseFloat(t.qty)||0), 0);
+
   cont.innerHTML = `
     <div style="overflow-x:auto">
       <table class="trade-log-table">
         <thead><tr>
           <th>Symbol</th><th>Type</th><th>Buy Price</th><th>Qty</th>
           <th>Total Value</th><th>Date</th>
-          <th>Live Price</th><th>P&amp;L (₹)</th><th>Gain %</th><th></th>
+          <th>Live Price</th><th>Today's Change</th><th>P&amp;L (₹)</th><th>Gain %</th><th></th>
         </tr></thead>
         <tbody>
           ${trades.map((t, i) => {
@@ -1155,22 +1159,100 @@ function renderTradeLog() {
               <td style="color:var(--accent);font-weight:600">${tv > 0 ? '₹'+fmtNum(tv) : '—'}</td>
               <td style="color:var(--subtext);font-size:12px">${escHTML(t.date||t.logged||'—')}</td>
               <td id="tl-ltp-${i}" style="color:var(--subtext)">...</td>
+              <td id="tl-today-${i}" style="font-weight:600">...</td>
               <td id="tl-pnl-${i}" style="font-weight:700">...</td>
               <td id="tl-pct-${i}" style="font-weight:700">...</td>
               <td><button class="del-btn" onclick="deleteTl(${i},'${escHTML(t.sym)}')">✕</button></td>
             </tr>`;
           }).join('')}
         </tbody>
+        <tfoot>
+          <tr class="tl-total-row">
+            <td colspan="4" style="font-weight:700;color:var(--text)">📊 TOTAL</td>
+            <td style="color:var(--accent);font-weight:700">₹${fmtNum(totalInvested)}</td>
+            <td></td>
+            <td style="color:var(--subtext);font-size:11px">Current Value:</td>
+            <td id="tl-total-today" style="font-weight:700;color:var(--subtext)">...</td>
+            <td id="tl-total-pnl" style="font-weight:700;color:var(--subtext)">...</td>
+            <td id="tl-total-pct" style="font-weight:700;color:var(--subtext)">...</td>
+            <td></td>
+          </tr>
+        </tfoot>
       </table>
     </div>
-    <div style="padding:10px 12px;color:var(--subtext);font-size:12px;background:var(--card2);border-radius:0 0 8px 8px;display:flex;gap:20px;flex-wrap:wrap">
+    <div style="padding:10px 12px;color:var(--subtext);font-size:12px;background:var(--card2);border-top:1px solid var(--border);display:flex;gap:20px;flex-wrap:wrap">
       <span>Total: <b style="color:var(--text)">${trades.length} trades</b></span>
       <span>BUY: <b style="color:var(--green)">${trades.filter(t=>t.type==='BUY').length}</b></span>
       <span>SELL: <b style="color:var(--red)">${trades.filter(t=>t.type==='SELL').length}</b></span>
-      <span>Invested: <b style="color:var(--accent)">₹${fmtNum(trades.filter(t=>t.type==='BUY').reduce((s,t)=>s+(parseFloat(t.price)||0)*(parseFloat(t.qty)||0),0))}</b></span>
+      <span>Invested: <b style="color:var(--accent)">₹${fmtNum(totalInvested)}</b></span>
+    </div>
+    <div id="tl-summary-bar" style="padding:10px 16px;background:var(--card);border-top:1px solid var(--border);border-radius:0 0 8px 8px;display:flex;gap:24px;flex-wrap:wrap;align-items:center;font-size:13px">
+      <span style="color:var(--subtext)">Current: <b id="tl-sb-current" style="color:var(--text)">...</b></span>
+      <span style="color:var(--subtext)">Invested: <b style="color:var(--accent)">₹${fmtNum(totalInvested)}</b></span>
+      <span style="color:var(--subtext)">Total P&amp;L: <b id="tl-sb-pnl" style="color:var(--subtext)">...</b></span>
+      <span style="color:var(--subtext)">Overall: <b id="tl-sb-pct" style="color:var(--subtext)">...</b></span>
     </div>`;
 
+  // Store per-row pnl for total calculation
+  window._tlPnlMap   = {};
+  window._tlTodayMap = {};
+  window._tlInvested = totalInvested;
+  window._tlCount    = trades.length;
+
   trades.forEach((t, i) => fetchTlPnl(t, i));
+}
+
+function _updateTlTotal() {
+  const pnlEl   = document.getElementById('tl-total-pnl');
+  const pctEl   = document.getElementById('tl-total-pct');
+  const todayEl = document.getElementById('tl-total-today');
+  if (!pnlEl || !pctEl) return;
+
+  const pnlMap   = window._tlPnlMap   || {};
+  const todayMap = window._tlTodayMap || {};
+  const invested = window._tlInvested || 0;
+
+  if (Object.keys(pnlMap).length === 0) return;
+
+  // Total P&L
+  let totalPnl = 0;
+  for (const v of Object.values(pnlMap)) totalPnl += v;
+  const pnlColor = totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+  pnlEl.textContent = `${totalPnl >= 0 ? '+' : ''}₹${fmtNum(Math.abs(totalPnl))}`;
+  pnlEl.style.color = pnlColor;
+
+  if (invested > 0) {
+    const pct = (totalPnl / invested) * 100;
+    pctEl.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+    pctEl.style.color = pnlColor;
+  }
+
+  // Today's total change
+  if (todayEl && Object.keys(todayMap).length > 0) {
+    let totalToday = 0;
+    for (const v of Object.values(todayMap)) totalToday += v;
+    const todayColor = totalToday >= 0 ? 'var(--green)' : 'var(--red)';
+    todayEl.textContent = `${totalToday >= 0 ? '+' : ''}₹${fmtNum(Math.abs(totalToday))}`;
+    todayEl.style.color = todayColor;
+  }
+
+  // ── Summary bar ──────────────────────────────────────────────────────────
+  const sbCurrent = document.getElementById('tl-sb-current');
+  const sbPnl     = document.getElementById('tl-sb-pnl');
+  const sbPct     = document.getElementById('tl-sb-pct');
+
+  const currentVal = invested + totalPnl;
+  if (sbCurrent) sbCurrent.textContent = '₹' + fmtNum(currentVal);
+
+  if (sbPnl) {
+    sbPnl.textContent = `${totalPnl >= 0 ? '+' : ''}₹${fmtNum(Math.abs(totalPnl))}`;
+    sbPnl.style.color = pnlColor;
+  }
+  if (sbPct && invested > 0) {
+    const pct = (totalPnl / invested) * 100;
+    sbPct.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+    sbPct.style.color = pnlColor;
+  }
 }
 
 function deleteTl(idx, sym) {
@@ -1189,21 +1271,25 @@ function deleteTl(idx, sym) {
 }
 
 async function fetchTlPnl(trade, idx) {
-  const ltpEl = document.getElementById('tl-ltp-' + idx);
-  const pnlEl = document.getElementById('tl-pnl-' + idx);
-  const pctEl = document.getElementById('tl-pct-' + idx);
+  const ltpEl   = document.getElementById('tl-ltp-'   + idx);
+  const pnlEl   = document.getElementById('tl-pnl-'   + idx);
+  const pctEl   = document.getElementById('tl-pct-'   + idx);
+  const todayEl = document.getElementById('tl-today-' + idx);
   if (!pnlEl) return;
 
   try {
-    // Try NSE live first, fallback to /api/price
-    let ltp = 0;
+    let ltp = 0, todayChg = null, todayPct = null;
+
+    // NSE live — gives ltp + today's change
     try {
       const r1 = await fetch(`/api/live/${trade.sym}`);
       const d1 = await r1.json();
-      ltp = parseFloat(d1.ltp) || 0;
+      ltp      = parseFloat(d1.ltp)        || 0;
+      todayChg = parseFloat(d1.change)     || null;
+      todayPct = parseFloat(d1.change_pct) || null;
     } catch {}
 
-    // Fallback: yfinance price
+    // Fallback: yfinance price (no today's change available)
     if (!ltp) {
       try {
         const r2 = await fetch(`/api/price/${trade.sym}`);
@@ -1212,9 +1298,31 @@ async function fetchTlPnl(trade, idx) {
       } catch {}
     }
 
+    const qty = parseFloat(trade.qty) || 1;
+
+    // ── Today's Change column ─────────────────────────────────────────────
+    if (todayEl) {
+      if (todayChg !== null && todayPct !== null) {
+        const todayTotal = todayChg * qty;  // ₹ change × qty held
+        const chgColor   = todayChg >= 0 ? 'var(--green)' : 'var(--red)';
+        const chgSign    = todayChg >= 0 ? '+' : '';
+        todayEl.innerHTML =
+          `<span style="color:${chgColor}">${chgSign}₹${fmtNum(Math.abs(todayTotal))}</span>` +
+          `<br><span style="font-size:11px;color:${chgColor}">${chgSign}${todayPct.toFixed(2)}%</span>`;
+
+        // Store for total
+        if (window._tlTodayMap) {
+          window._tlTodayMap[idx] = todayTotal;
+        }
+      } else {
+        todayEl.textContent = '—';
+        todayEl.style.color = 'var(--subtext)';
+        if (window._tlTodayMap) window._tlTodayMap[idx] = 0;
+      }
+    }
+
     if (ltp > 0 && trade.price) {
       const buyPrice = parseFloat(trade.price) || 0;
-      const qty      = parseFloat(trade.qty)   || 1;
       const sign     = trade.type === 'SELL' ? -1 : 1;
 
       if (ltpEl) {
@@ -1230,13 +1338,25 @@ async function fetchTlPnl(trade, idx) {
         pctEl.textContent = `${gainPct >= 0 ? '+' : ''}${gainPct.toFixed(2)}%`;
         pctEl.style.color = gainPct >= 0 ? 'var(--green)' : 'var(--red)';
       }
+
+      // Store for total
+      if (window._tlPnlMap) {
+        window._tlPnlMap[idx] = pnl;
+        _updateTlTotal();
+      }
     } else {
       if (ltpEl) { ltpEl.textContent = '—'; ltpEl.style.color = 'var(--subtext)'; }
       pnlEl.textContent = '—'; pnlEl.style.color = 'var(--subtext)';
       if (pctEl) { pctEl.textContent = '—'; pctEl.style.color = 'var(--subtext)'; }
+
+      if (window._tlPnlMap) {
+        window._tlPnlMap[idx] = 0;
+        _updateTlTotal();
+      }
     }
   } catch {
-    if (ltpEl) ltpEl.textContent = '—';
+    if (ltpEl)   ltpEl.textContent   = '—';
+    if (todayEl) todayEl.textContent = '—';
     pnlEl.textContent = '—';
     if (pctEl) pctEl.textContent = '—';
   }
