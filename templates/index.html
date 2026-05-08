@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>📈 Stock Analyzer Pro</title>
-<link rel="stylesheet" href="/static/css/style.css">
+<link rel="stylesheet" href="/static/css/style.css?v=2025b">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 </head>
 <body>
@@ -300,7 +300,10 @@
             <button class="id-tf-btn active" onclick="setTimeframe('3m',this)">3m</button>
             <button class="id-tf-btn" onclick="setTimeframe('5m',this)">5m</button>
             <button class="id-tf-btn" onclick="setTimeframe('15m',this)">15m</button>
+            <button class="id-tf-btn" onclick="setTimeframe('30m',this)">30m</button>
             <button class="id-tf-btn" onclick="setTimeframe('1h',this)">1h</button>
+            <button class="id-tf-btn" onclick="setTimeframe('1D',this)">1D</button>
+            <button class="id-tf-btn" onclick="setTimeframe('1W',this)">1W</button>
           </div>
           <button class="btn-scan" onclick="runIntradayAnalysis()" id="btn-id-scan">🔍 Analyze</button>
           <button class="btn-sm" onclick="toggleAutoRefresh()" id="btn-auto-refresh" style="background:rgba(0,230,168,0.1);border-color:var(--green);color:var(--green)">▶ Auto</button>
@@ -471,7 +474,7 @@
   </div>
 </div>
 
-<script src="/static/js/app.js"></script>
-<script src="/static/js/intraday.js"></script>
+<script src="/static/js/app.js?v=2025e"></script>
+<script src="/static/js/intraday.js?v=2025e"></script>
 </body>
 </html>

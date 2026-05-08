@@ -222,7 +222,232 @@ function renderSignals(d) {
       <div><div class="id-reasons-title" style="color:var(--red)">🐻 Bearish Signals</div>${bear||'<div class="id-reason" style="color:var(--subtext)">Koi bearish signal nahi</div>'}</div>
     </div>
 
+    ${renderHedgeAdvisor(d)}
+
     <div class="id-disclaimer">⚠️ Ye sirf educational analysis hai. Trading apni research aur risk tolerance ke basis pe karo. Past performance future results guarantee nahi karta.</div>`;
+}
+
+// ── Hedge Advisor ─────────────────────────────────────────────────────────────
+function renderHedgeAdvisor(d) {
+  const score  = d.score  || 0;
+  const vtype  = d.verdict_type || 'neutral';
+  const cur    = d.cur    || 0;
+  const atr    = d.atr    || 0;
+  const rsi    = d.rsi    || 50;
+  const stSig  = d.supertrend_signal || 'SELL';
+  const macd   = d.macd_cross || 'Bearish';
+  const vwap   = d.vwap;
+
+  // ── Determine market bias ──────────────────────────────────────────────────
+  let bias = 'neutral';
+  if (score >= 65 && stSig === 'BUY' && macd === 'Bullish') bias = 'strong_bull';
+  else if (score >= 50 && (stSig === 'BUY' || macd === 'Bullish')) bias = 'bull';
+  else if (score <= 35 && stSig === 'SELL' && macd === 'Bearish') bias = 'strong_bear';
+  else if (score <= 45 && (stSig === 'SELL' || macd === 'Bearish')) bias = 'bear';
+  else bias = 'neutral';
+
+  // ── Strike suggestions (ATM ± 1 step) ─────────────────────────────────────
+  // Round to nearest 50 for indices, 10/20/50 for stocks
+  const step = cur > 20000 ? 50 : cur > 5000 ? 100 : cur > 1000 ? 50 : cur > 500 ? 20 : 10;
+  const atm   = Math.round(cur / step) * step;
+  const otm1  = atm + step;   // 1 step OTM call
+  const otm1p = atm - step;   // 1 step OTM put
+
+  // ── Build strategies based on bias ────────────────────────────────────────
+  let strategies = [];
+
+  if (bias === 'strong_bull') {
+    strategies = [
+      {
+        action: 'CALL BUY',
+        color: 'var(--green)',
+        bg: 'rgba(0,230,168,0.08)',
+        border: 'var(--green)',
+        icon: '📈',
+        strike: `ATM ${atm} CE`,
+        reason: `Strong bullish — Score ${score}/100, Supertrend BUY, MACD Bullish`,
+        risk: 'Limited (premium paid)',
+        reward: 'Unlimited upside',
+        when: 'Expiry tak hold karo agar trend continue kare',
+        sl: `SL: ₹${fmtNum(d.sl_buy)} (stock/index pe)`,
+      },
+      {
+        action: 'PUT SELL',
+        color: '#00CC88',
+        bg: 'rgba(0,204,136,0.06)',
+        border: '#00CC88',
+        icon: '💰',
+        strike: `OTM ${otm1p} PE`,
+        reason: `Strong trend — premium collect karo, put expire hoga`,
+        risk: 'High (unlimited loss if reversal)',
+        reward: 'Premium income',
+        when: 'Sirf agar confident ho trend mein',
+        sl: `Cover karo agar price ${otm1p} ke neeche jaaye`,
+      },
+    ];
+  } else if (bias === 'bull') {
+    strategies = [
+      {
+        action: 'CALL BUY',
+        color: 'var(--green)',
+        bg: 'rgba(0,230,168,0.08)',
+        border: 'var(--green)',
+        icon: '📈',
+        strike: `ATM ${atm} CE`,
+        reason: `Bullish bias — Score ${score}/100`,
+        risk: 'Limited (premium paid)',
+        reward: 'Good upside potential',
+        when: 'Confirmation ke baad enter karo',
+        sl: `SL: ₹${fmtNum(d.sl_buy)}`,
+      },
+      {
+        action: 'BULL CALL SPREAD',
+        color: 'var(--accent)',
+        bg: 'rgba(77,142,255,0.08)',
+        border: 'var(--accent)',
+        icon: '🔀',
+        strike: `BUY ${atm} CE + SELL ${otm1} CE`,
+        reason: `Cost kam karo — limited upside but cheaper entry`,
+        risk: 'Limited (net debit)',
+        reward: `Max profit: ${step} points`,
+        when: 'Moderate bullish view ke liye best',
+        sl: `Exit agar ${atm} CE 50% loss ho`,
+      },
+    ];
+  } else if (bias === 'strong_bear') {
+    strategies = [
+      {
+        action: 'PUT BUY',
+        color: 'var(--red)',
+        bg: 'rgba(255,61,92,0.08)',
+        border: 'var(--red)',
+        icon: '📉',
+        strike: `ATM ${atm} PE`,
+        reason: `Strong bearish — Score ${score}/100, Supertrend SELL, MACD Bearish`,
+        risk: 'Limited (premium paid)',
+        reward: 'Unlimited downside capture',
+        when: 'Expiry tak hold karo agar trend continue kare',
+        sl: `SL: ₹${fmtNum(d.sl_sell)} (stock/index pe)`,
+      },
+      {
+        action: 'CALL SELL',
+        color: 'var(--orange)',
+        bg: 'rgba(255,149,0,0.08)',
+        border: 'var(--orange)',
+        icon: '💰',
+        strike: `OTM ${otm1} CE`,
+        reason: `Bearish trend — call expire hoga, premium collect karo`,
+        risk: 'High (unlimited loss if reversal)',
+        reward: 'Premium income',
+        when: 'Sirf agar confident ho bearish trend mein',
+        sl: `Cover karo agar price ${otm1} ke upar jaaye`,
+      },
+    ];
+  } else if (bias === 'bear') {
+    strategies = [
+      {
+        action: 'PUT BUY',
+        color: 'var(--red)',
+        bg: 'rgba(255,61,92,0.08)',
+        border: 'var(--red)',
+        icon: '📉',
+        strike: `ATM ${atm} PE`,
+        reason: `Bearish bias — Score ${score}/100`,
+        risk: 'Limited (premium paid)',
+        reward: 'Good downside capture',
+        when: 'Confirmation ke baad enter karo',
+        sl: `SL: ₹${fmtNum(d.sl_sell)}`,
+      },
+      {
+        action: 'BEAR PUT SPREAD',
+        color: 'var(--accent)',
+        bg: 'rgba(77,142,255,0.08)',
+        border: 'var(--accent)',
+        icon: '🔀',
+        strike: `BUY ${atm} PE + SELL ${otm1p} PE`,
+        reason: `Cost kam karo — limited downside but cheaper entry`,
+        risk: 'Limited (net debit)',
+        reward: `Max profit: ${step} points`,
+        when: 'Moderate bearish view ke liye best',
+        sl: `Exit agar ${atm} PE 50% loss ho`,
+      },
+    ];
+  } else {
+    // Neutral — suggest straddle/strangle or wait
+    strategies = [
+      {
+        action: 'WAIT / NO TRADE',
+        color: 'var(--yellow)',
+        bg: 'rgba(255,214,0,0.08)',
+        border: 'var(--yellow)',
+        icon: '⏳',
+        strike: '—',
+        reason: `Mixed signals — Score ${score}/100. Clear direction nahi hai.`,
+        risk: 'N/A',
+        reward: 'N/A',
+        when: 'Breakout ya breakdown ka wait karo',
+        sl: 'N/A',
+      },
+      {
+        action: 'SHORT STRADDLE',
+        color: 'var(--subtext)',
+        bg: 'rgba(139,146,184,0.08)',
+        border: 'var(--subtext)',
+        icon: '🎯',
+        strike: `SELL ${atm} CE + SELL ${atm} PE`,
+        reason: `Range-bound market — dono side premium collect karo`,
+        risk: 'High (if big move happens)',
+        reward: 'Double premium income',
+        when: 'Sirf low volatility + expiry near ho tab',
+        sl: `Exit agar price ${atm - step*2} ya ${atm + step*2} jaaye`,
+      },
+    ];
+  }
+
+  const biasLabels = {
+    strong_bull: { text: '🚀 STRONG BULLISH', col: 'var(--green)' },
+    bull:        { text: '📈 BULLISH',         col: '#00CC88' },
+    neutral:     { text: '⏸️ NEUTRAL',          col: 'var(--yellow)' },
+    bear:        { text: '📉 BEARISH',          col: 'var(--orange)' },
+    strong_bear: { text: '🔴 STRONG BEARISH',   col: 'var(--red)' },
+  };
+  const bl = biasLabels[bias] || biasLabels.neutral;
+
+  const cards = strategies.map(s => `
+    <div style="background:${s.bg};border:1px solid ${s.border};border-radius:10px;padding:14px;flex:1;min-width:260px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="font-size:20px">${s.icon}</span>
+        <div>
+          <div style="font-weight:800;font-size:15px;color:${s.color}">${s.action}</div>
+          <div style="font-size:12px;color:var(--subtext)">${escHTML(s.strike)}</div>
+        </div>
+      </div>
+      <div style="font-size:12px;line-height:1.7;color:var(--text)">
+        <div>📌 <b>Why:</b> ${escHTML(s.reason)}</div>
+        <div>⚠️ <b>Risk:</b> <span style="color:var(--red)">${escHTML(s.risk)}</span></div>
+        <div>💰 <b>Reward:</b> <span style="color:var(--green)">${escHTML(s.reward)}</span></div>
+        <div>🕐 <b>Hold:</b> ${escHTML(s.when)}</div>
+        <div style="margin-top:6px;padding:6px 8px;background:rgba(0,0,0,0.2);border-radius:5px;font-size:11px;color:var(--yellow)">🛑 ${escHTML(s.sl)}</div>
+      </div>
+    </div>`).join('');
+
+  return `
+    <div style="margin:16px 0;background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden">
+      <div style="padding:12px 16px;background:var(--card2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px">
+        <span style="font-size:18px">🛡️</span>
+        <div>
+          <div style="font-weight:700;font-size:14px">Options Hedge Advisor</div>
+          <div style="font-size:12px;color:var(--subtext)">Expiry tak ke liye suggested strategies</div>
+        </div>
+        <div style="margin-left:auto;font-weight:700;color:${bl.col};font-size:13px">${bl.text}</div>
+      </div>
+      <div style="padding:14px;display:flex;gap:12px;flex-wrap:wrap">
+        ${cards}
+      </div>
+      <div style="padding:8px 16px;font-size:11px;color:var(--subtext);border-top:1px solid var(--border);background:var(--card2)">
+        ⚠️ ATM Strike: <b style="color:var(--yellow)">${atm}</b> | Current: <b>₹${fmtNum(cur)}</b> | ATR: <b>₹${atr}</b> | Ye suggestions educational hain — apna judgment use karo
+      </div>
+    </div>`;
 }
 
 // ── Option Chain ──────────────────────────────────────────────────────────────

@@ -562,7 +562,7 @@ function switchAtab(tab, btn) {
   if (btn) btn.classList.add('active');
 
   if (tab === 'technical') {
-    renderTechnical();
+    renderTechnical('day');   // default: Day timeframe
   } else if (tab === 'notes') {
     renderNotes();
   } else {
@@ -606,21 +606,39 @@ function renderChecklist(data, tab) {
 }
 
 // ── Technical Render ───────────────────────────
-async function renderTechnical() {
+async function renderTechnical(mode) {
+  // mode: 'day' | 'week' | 'month'
+  if (!mode) mode = 'day';
+
+  const modeConfig = {
+    day:   { label: '📅 Daily (1 Year)',    backendMode: 'swing',      desc: 'Daily candles — 1 saal' },
+    week:  { label: '📆 Weekly (2 Years)',  backendMode: 'positional', desc: 'Weekly candles — 2 saal' },
+    month: { label: '🗓️ Monthly (5 Years)', backendMode: 'longterm',   desc: 'Monthly candles — 5 saal' },
+  };
+  const cfg = modeConfig[mode] || modeConfig.day;
+
   const sym = currentSym || (currentData && currentData.nse_symbol);
   if (!sym) {
     document.getElementById('atab-content').innerHTML = '<div class="loading-box">⚠️ Symbol nahi mila</div>';
     return;
   }
 
-  document.getElementById('atab-content').innerHTML = `
-    <div class="loading-full">
+  const tfBtns = `
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:12px;color:var(--subtext);margin-right:4px">Timeframe:</span>
+      <button class="id-tf-btn${mode==='day'?' active':''}" onclick="renderTechnical('day')" style="padding:5px 14px;font-size:13px">📅 Day</button>
+      <button class="id-tf-btn${mode==='week'?' active':''}" onclick="renderTechnical('week')" style="padding:5px 14px;font-size:13px">📆 Week</button>
+      <button class="id-tf-btn${mode==='month'?' active':''}" onclick="renderTechnical('month')" style="padding:5px 14px;font-size:13px">🗓️ Month</button>
+      <span style="font-size:11px;color:var(--subtext);margin-left:8px">${cfg.desc}</span>
+    </div>`;
+
+  document.getElementById('atab-content').innerHTML = tfBtns + `
+    <div class="loading-full" style="min-height:120px">
       <div class="spinner"></div>
-      <div>Technical data calculate ho rahi hai — RSI • MACD • EMA • Patterns</div>
+      <div>Technical analysis — ${cfg.label}</div>
     </div>`;
 
   try {
-    // Pass fundamental data (PE, ROE etc.) so valuation meter works
     const fd = currentData ? {
       pe:              currentData.pe,
       roe:             currentData.roe,
@@ -631,16 +649,17 @@ async function renderTechnical() {
       debt_to_equity:  currentData.debt_to_equity,
       promoter_holding:currentData.promoter_holding,
     } : {};
-    const fdParam = Object.keys(fd).length ? '?fdata=' + encodeURIComponent(JSON.stringify(fd)) : '';
-    const res = await fetch(`/api/technical/${encodeURIComponent(sym)}${fdParam}`);
+    const params = new URLSearchParams({ mode: cfg.backendMode });
+    if (Object.keys(fd).length) params.set('fdata', JSON.stringify(fd));
+    const res = await fetch(`/api/technical/${encodeURIComponent(sym)}?${params}`);
     const r   = await res.json();
 
     if (r.error) {
-      document.getElementById('atab-content').innerHTML = `<div class="loading-box" style="color:var(--red)">❌ ${escHTML(r.error)}</div>`;
+      document.getElementById('atab-content').innerHTML = tfBtns +
+        `<div class="loading-box" style="color:var(--red)">❌ ${escHTML(r.error)}</div>`;
       return;
     }
 
-    // Verdict
     const vColors = {
       strong_buy: {bg:'#0A2A18', col:'var(--green)'},
       buy:        {bg:'#082015', col:'#00CC88'},
@@ -648,16 +667,16 @@ async function renderTechnical() {
       avoid:      {bg:'#200810', col:'var(--red)'},
     };
     const vc = vColors[r.verdict_type] || vColors.wait;
+    const scCol = r.score >= 70 ? 'var(--green)' : r.score >= 50 ? 'var(--yellow)' : 'var(--red)';
 
-    let html = `<div class="verdict-box" style="background:${vc.bg}">
+    let html = tfBtns + `
+    <div class="verdict-box" style="background:${vc.bg}">
       <div>
         <div class="verdict-text" style="color:${vc.col}">${escHTML(r.verdict)}</div>
         <div class="verdict-reason">Technical Score: ${r.score}/100</div>
       </div>
     </div>`;
 
-    // Score bar
-    const scCol = r.score >= 70 ? 'var(--green)' : r.score >= 50 ? 'var(--yellow)' : 'var(--red)';
     html += `<div class="score-bar-wrap">
       <div class="score-num" style="color:${scCol}">${r.score}</div>
       <div style="flex:1">

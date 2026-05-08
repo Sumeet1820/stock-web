@@ -40,6 +40,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import requests as _req
 
 app = Flask(__name__)
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # static files cache disable
 # Permanent secret key — restart pe session expire nahi hoga
 _sk_file = os.path.join(BASE, '.secret_key')
 if os.path.exists(_sk_file):
@@ -100,24 +101,54 @@ def _evaluate_checklist(data, tab):
                 items.append({'name':name,'condition':cond,'status':'nodata','value':val,'icon':'⚠️'})
     return {'items':items,'passed':passed,'total':total,'score':round(passed/total*100) if total else 0}
 
-def _compute_technical(sym, fdata=None):
+def _compute_technical(sym, fdata=None, mode='swing'):
+    # mode: swing=daily 1Y (Day), positional=weekly 2Y (Week), longterm=monthly 5Y (Month)
     import math, statistics as _stats
+    if mode == 'positional':
+        fetch_interval, fetch_period = '1wk', '2y'
+    elif mode == 'longterm':
+        # Fetch 5Y daily, resample to monthly — yfinance 1mo is unreliable
+        fetch_interval, fetch_period = '1d', '5y'
+    else:  # swing / day
+        fetch_interval, fetch_period = '1d', '1y'
     try:
         import yfinance as yf, numpy as np
-        hist=yf.download(f"{sym}.NS",period="1y",interval="1d",auto_adjust=True,progress=False)
+        hist = yf.download(f"{sym}.NS", period=fetch_period, interval=fetch_interval,
+                           auto_adjust=True, progress=False)
         if hist is None or hist.empty:
-            hist=yf.Ticker(f"{sym}.NS").history(period="1y",auto_adjust=True,actions=False)
-        if hist is None or hist.empty: return {'error':f'{sym} ka data nahi mila'}
+            hist = yf.Ticker(f"{sym}.NS").history(period=fetch_period, interval=fetch_interval,
+                                                   auto_adjust=True, actions=False)
+        if hist is None or hist.empty: return {'error': f'{sym} ka data nahi mila'}
         if hasattr(hist.columns,'levels'): hist.columns=hist.columns.get_level_values(0)
         try: hist.index=hist.index.tz_localize(None) if hist.index.tzinfo else hist.index
         except: pass
-        hist=hist.dropna(subset=['Close','High','Low','Volume'])
-        if len(hist)<20: return {'error':'Data bahut kam hai'}
+        hist = hist.dropna(subset=['Close','High','Low'])
+        if 'Volume' not in hist.columns: hist['Volume'] = 0
+
+        # ── Split-adjusted data filter ────────────────────────────────────────
+        if len(hist) > 0:
+            cur_price = float(hist['Close'].iloc[-1])
+            if cur_price > 0:
+                hist = hist[(hist['Close'] >= cur_price / 20) & (hist['Close'] <= cur_price * 20)]
+
+        # For longterm: resample daily → monthly candles (accurate)
+        if mode == 'longterm':
+            import pandas as pd
+            hist = hist.dropna(subset=['Close','High','Low'])
+            if 'Volume' not in hist.columns: hist['Volume'] = 0
+            agg = {'Close':'last','High':'max','Low':'min','Volume':'sum'}
+            if 'Open' in hist.columns: agg['Open'] = 'first'
+            hist = hist.resample('ME').agg(agg).dropna(subset=['Close'])
+
+        hist = hist.dropna(subset=['Close','High','Low'])
+        if 'Volume' not in hist.columns: hist['Volume'] = 0
+        if len(hist) < 20:
+            return {'error': f'Data bahut kam hai ({len(hist)} candles) — stock naya listed ho sakta hai'}
         c=hist['Close'].values.astype(float); h=hist['High'].values.astype(float)
         l=hist['Low'].values.astype(float); v=hist['Volume'].values.astype(float)
         valid=~(np.isnan(c)|np.isnan(h)|np.isnan(l))
         c,h,l,v=c[valid],h[valid],l[valid],v[valid]; n=len(c)
-        if n<20: return {'error':'Valid data bahut kam hai'}
+        if n < 20: return {'error': f'Valid data bahut kam hai ({n} candles)'}
         has_open='Open' in hist.columns
         o_arr=hist['Open'].values.astype(float)[valid] if has_open else None
 
@@ -135,7 +166,7 @@ def _compute_technical(sym, fdata=None):
             if al==0: return 100
             return round(100-(100/(1+ag/al)),1)
 
-        rsi_val=rsi_calc(c.tolist())
+        rsi_val=rsi_calc(c.tolist()) if n>14 else 50.0
         ema12=ema(c.tolist(),12); ema26=ema(c.tolist(),26)
         macd_line=[ema12[i]-ema26[i] for i in range(n)]
         signal_line=ema(macd_line[25:],9) if n>25 else []
@@ -873,13 +904,17 @@ def api_direct(sym):
 
 @app.route('/api/technical/<sym>')
 def api_technical(sym):
-    fd={}
+    fd = {}
     try:
-        r=request.args.get('fdata','')
-        if r: fd=json.loads(r)
+        r = request.args.get('fdata', '')
+        if r: fd = json.loads(r)
     except: pass
-    try: return jsonify(_compute_technical(sym.upper(),fd))
-    except Exception as e: return jsonify({'error':str(e)}),500
+    # Accept both frontend names (day/week/month) and backend names (swing/positional/longterm)
+    mode_raw = request.args.get('mode', 'swing')
+    mode_map = {'day': 'swing', 'week': 'positional', 'month': 'longterm'}
+    mode = mode_map.get(mode_raw, mode_raw)
+    try: return jsonify(_compute_technical(sym.upper(), fd, mode=mode))
+    except Exception as e: return jsonify({'error': str(e)}), 500
 
 @app.route('/api/returns/<sym>')
 def api_returns(sym):
@@ -1631,45 +1666,69 @@ def api_intraday_signals():
 
     import numpy as np, math
 
+    # Timeframe config
+    # Upstox intraday API only supports today's 1min candles — for 30m/1h/2h/3h we resample
+    # For 1D/1W we use historical daily candles (different Upstox endpoint or yfinance)
+    INTRADAY_TF  = {'3m', '5m', '15m', '30m', '1h', '2h', '3h'}   # today's candles
+    DAILY_TF     = {'1D', '1W'}                                      # historical daily/weekly
+
     candles_rs = None
     data_source = 'unknown'
 
-    # ── Try Upstox first (works for indices + all NSE EQ stocks) ─────────────
+    # ── Try Upstox first ──────────────────────────────────────────────────────
     if _upstox_token:
         ikey = _get_instrument_key(sym)
         if ikey:
             import requests as _rq
             ikey_enc = ikey.replace('|', '%7C').replace(' ', '%20')
             try:
-                r = _rq.get(
-                    f'https://api.upstox.com/v2/historical-candle/intraday/{ikey_enc}/1minute',
-                    headers=_upstox_headers(), timeout=15)
-                if r.status_code == 200:
-                    raw = r.json().get('data', {}).get('candles', [])
-                    if raw:
-                        tf_mins = {'3m': 3, '5m': 5, '15m': 15, '1h': 60}.get(tf, 15)
-                        raw.reverse()  # oldest first
+                if tf in DAILY_TF:
+                    # Historical daily candles — last 1 year
+                    import datetime as _dt
+                    to_d   = _dt.date.today().strftime('%Y-%m-%d')
+                    from_d = (_dt.date.today() - _dt.timedelta(days=365)).strftime('%Y-%m-%d')
+                    interval = '1day' if tf == '1D' else '1week'
+                    r = _rq.get(
+                        f'https://api.upstox.com/v2/historical-candle/{ikey_enc}/{interval}/{to_d}/{from_d}',
+                        headers=_upstox_headers(), timeout=15)
+                    if r.status_code == 200:
+                        raw = r.json().get('data', {}).get('candles', [])
+                        if raw:
+                            raw.reverse()
+                            candles_rs = raw
+                            data_source = 'Upstox'
+                else:
+                    # Intraday 1min candles — resample to requested tf
+                    r = _rq.get(
+                        f'https://api.upstox.com/v2/historical-candle/intraday/{ikey_enc}/1minute',
+                        headers=_upstox_headers(), timeout=15)
+                    if r.status_code == 200:
+                        raw = r.json().get('data', {}).get('candles', [])
+                        if raw:
+                            tf_mins = {'3m': 3, '5m': 5, '15m': 15, '30m': 30,
+                                       '1h': 60, '2h': 120, '3h': 180}.get(tf, 15)
+                            raw.reverse()
 
-                        def resample(candles, mins):
-                            if mins == 1: return candles
-                            out = []; buf = []
-                            for c in candles:
-                                buf.append(c)
-                                if len(buf) >= mins:
+                            def resample(candles, mins):
+                                if mins == 1: return candles
+                                out = []; buf = []
+                                for c in candles:
+                                    buf.append(c)
+                                    if len(buf) >= mins:
+                                        out.append([buf[0][0], buf[0][1],
+                                            max(x[2] for x in buf), min(x[3] for x in buf),
+                                            buf[-1][4], sum(x[5] for x in buf), buf[-1][6]])
+                                        buf = []
+                                if buf:
                                     out.append([buf[0][0], buf[0][1],
                                         max(x[2] for x in buf), min(x[3] for x in buf),
                                         buf[-1][4], sum(x[5] for x in buf), buf[-1][6]])
-                                    buf = []
-                            if buf:
-                                out.append([buf[0][0], buf[0][1],
-                                    max(x[2] for x in buf), min(x[3] for x in buf),
-                                    buf[-1][4], sum(x[5] for x in buf), buf[-1][6]])
-                            return out
+                                return out
 
-                        candles_rs = resample(raw, tf_mins)
-                        data_source = 'Upstox'
-                elif r.status_code == 400:
-                    print(f'[Upstox signals] 400 for {sym} ({ikey}): {r.text[:120]}')
+                            candles_rs = resample(raw, tf_mins)
+                            data_source = 'Upstox'
+                    elif r.status_code == 400:
+                        print(f'[Upstox signals] 400 for {sym} ({ikey}): {r.text[:120]}')
             except Exception as ex:
                 print(f'[Upstox signals] {sym}: {ex}')
         else:
@@ -1679,8 +1738,17 @@ def api_intraday_signals():
     if not candles_rs:
         try:
             import yfinance as yf
-            tf_map     = {'3m': '2m', '5m': '5m', '15m': '15m', '1h': '60m'}
-            period_map = {'3m': '1d', '5m': '1d',  '15m': '5d',  '1h': '5d'}
+            # yfinance interval + period mapping
+            tf_map = {
+                '3m':  '2m',  '5m':  '5m',  '15m': '15m',
+                '30m': '30m', '1h':  '60m', '2h':  '60m',
+                '3h':  '60m', '1D':  '1d',  '1W':  '1wk',
+            }
+            period_map = {
+                '3m':  '1d',  '5m':  '1d',  '15m': '5d',
+                '30m': '5d',  '1h':  '5d',  '2h':  '10d',
+                '3h':  '10d', '1D':  '1y',  '1W':  '2y',
+            }
             yf_tf  = tf_map.get(tf, '15m')
             period = period_map.get(tf, '5d')
             idx_map = {
