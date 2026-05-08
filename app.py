@@ -51,6 +51,14 @@ else:
 from datetime import timedelta
 app.permanent_session_lifetime = timedelta(days=365)
 
+# ── FNO Stocks List (Options Trading Enabled) ────────────────────────────────
+FNO_STOCKS = {
+    # Indices
+    'NIFTY','BANKNIFTY','FINNIFTY','MIDCPNIFTY',
+    # Top FNO Stocks (alphabetically)
+    'ABB','ABBOTINDIA','ABCAPITAL','ABFRL','ACC','ADANIENT','ADANIPORTS','ALKEM','AMBUJACEM','APOLLOHOSP','APOLLOTYRE','ASHOKLEY','ASIANPAINT','ASTRAL','ATUL','AUBANK','AUROPHARMA','AXISBANK','BAJAJ-AUTO','BAJAJFINSV','BAJFINANCE','BALKRISIND','BALRAMCHIN','BANDHANBNK','BANKBARODA','BATAINDIA','BEL','BERGEPAINT','BHARATFORG','BHARTIARTL','BHEL','BIOCON','BOSCHLTD','BPCL','BRITANNIA','BSOFT','CANBK','CANFINHOME','CHAMBLFERT','CHOLAFIN','CIPLA','COALINDIA','COFORGE','COLPAL','CONCOR','COROMANDEL','CROMPTON','CUB','CUMMINSIND','DABUR','DALBHARAT','DEEPAKNTR','DELTACORP','DIVISLAB','DIXON','DLF','DRREDDY','EICHERMOT','ESCORTS','EXIDEIND','FEDERALBNK','GAIL','GLENMARK','GMRINFRA','GNFC','GODREJCP','GODREJPROP','GRANULES','GRASIM','GUJGASLTD','HAL','HAVELLS','HCLTECH','HDFCAMC','HDFCBANK','HDFCLIFE','HEROMOTOCO','HINDALCO','HINDCOPPER','HINDPETRO','HINDUNILVR','IBULHSGFIN','ICICIBANK','ICICIGI','ICICIPRULI','IDEA','IDFC','IDFCFIRSTB','IEX','IGL','INDHOTEL','INDIACEM','INDIAMART','INDIGO','INDUSINDBK','INDUSTOWER','INFY','IOC','IPCALAB','IRCTC','ITC','JINDALSTEL','JKCEMENT','JSWSTEEL','JUBLFOOD','KOTAKBANK','L&TFH','LALPATHLAB','LAURUSLABS','LICHSGFIN','LT','LTI','LTTS','LUPIN','M&M','M&MFIN','MANAPPURAM','MARICO','MARUTI','MCDOWELL-N','MCX','METROPOLIS','MFSL','MGL','MOTHERSON','MPHASIS','MRF','MUTHOOTFIN','NATIONALUM','NAUKRI','NAVINFLUOR','NESTLEIND','NMDC','NTPC','OBEROIRLTY','OFSS','ONGC','PAGEIND','PEL','PERSISTENT','PETRONET','PFC','PIDILITIND','PIIND','PNB','POLYCAB','POWERGRID','PVRINOX','RAIN','RAMCOCEM','RBLBANK','RECLTD','RELIANCE','SAIL','SBICARD','SBILIFE','SBIN','SHREECEM','SIEMENS','SRF','SUNPHARMA','SUNTV','SYNGENE','TATACHEM','TATACOMM','TATACONSUM','TATAMOTORS','TATAPOWER','TATASTEEL','TCS','TECHM','TITAN','TORNTPHARM','TORNTPOWER','TRENT','TVSMOTOR','UBL','ULTRACEMCO','UPL','VEDL','VOLTAS','WIPRO','ZEEL','ZYDUSLIFE'
+}
+
 BROAD = {'NIFTY 50','NIFTY NEXT 50','NIFTY 100','NIFTY 200','NIFTY 500','NIFTY MIDCAP 50','NIFTY MIDCAP 100','NIFTY MIDCAP 150','NIFTY SMLCAP 50','NIFTY SMLCAP 100','NIFTY SMLCAP 250','NIFTY MIDSML 400','NIFTY LARGEMID250','NIFTY MID SELECT','NIFTY MICROCAP250','NIFTY TOTAL MKT','INDIA VIX','NIFTY500 MULTICAP','NIFTY500 LMS EQL','NIFTY FPI 150'}
 SECTORAL = {'NIFTY AUTO','NIFTY BANK','NIFTY FIN SERVICE','NIFTY FINSRV25 50','NIFTY FMCG','NIFTY IT','NIFTY MEDIA','NIFTY METAL','NIFTY PHARMA','NIFTY PSU BANK','NIFTY REALTY','NIFTY PVT BANK','NIFTY HEALTHCARE','NIFTY CONSR DURBL','NIFTY OIL AND GAS','NIFTY MIDSML HLTH','NIFTY CHEMICALS','NIFTY500 HEALTH','NIFTY FINSEREXBNK','NIFTY MS IT TELCM','NIFTY MS FIN SERV'}
 THEMATIC = {'NIFTY COMMODITIES','NIFTY CONSUMPTION','NIFTY CPSE','NIFTY ENERGY','NIFTY INFRA','NIFTY MNC','NIFTY PSE','NIFTY SERV SECTOR','NIFTY100 LIQ 15','NIFTY MID LIQ 15','NIFTY IND DIGITAL','NIFTY100 ESG','NIFTY100ESGSECLDR','NIFTY INDIA MFG','NIFTY TATA 25 CAP','NIFTY MULTI MFG','NIFTY MULTI INFRA','NIFTY IND DEFENCE','NIFTY IND TOURISM','NIFTY CAPITAL MKT','NIFTY EV','NIFTY NEW CONSUMP','NIFTY CORP MAATR','NIFTY MOBILITY','NIFTY100 ENH ESG','NIFTY COREHOUSING','NIFTY HOUSING','NIFTY IPO','NIFTY MS IND CONS','NIFTY NONCYC CONS','NIFTY RURAL','NIFTY SHARIAH 25','NIFTY TRANS LOGIS','NIFTY50 SHARIAH','NIFTY500 SHARIAH','NIFTY SME EMERGE','NIFTY INTERNET','NIFTY WAVES','NIFTY INFRALOG','NIFTY RAILWAYSPSU','NIFTYCONGLOMERATE'}
@@ -715,28 +723,88 @@ def home():
 
 @app.route('/api/search')
 def api_search():
-    q=request.args.get('q','').strip()
+    q = request.args.get('q', '').strip()
+    fno_only = request.args.get('fno', '').lower() in ('1', 'true', 'yes')
     if not q: return jsonify([])
+
+    q_up = q.upper()
+
     try:
-        # Case-insensitive: try original, then uppercase, then lowercase
-        results = search_stock(q)
-        if not results:
-            results = search_stock(q.upper())
-        if not results:
-            results = search_stock(q.lower())
-        # Enrich each result with symbol extracted from URL
-        enriched = []
-        for r in results[:12]:
-            item = dict(r)
-            # Extract symbol from screener URL: /company/HDFCBANK/ → HDFCBANK
-            url_sym = ''
-            if item.get('url'):
-                m = re.search(r'/company/([^/]+)/', item['url'])
-                if m: url_sym = m.group(1).upper()
-            item['symbol'] = url_sym or item.get('symbol','')
-            enriched.append(item)
-        return jsonify(enriched)
-    except Exception as e: return jsonify({'error':str(e)}),500
+        # ── Local FNO match first (instant, no network) ───────────────────
+        local_fno = []
+        for sym in sorted(FNO_STOCKS):
+            if sym.startswith(q_up) or q_up in sym:
+                local_fno.append({
+                    'name': sym,
+                    'symbol': sym,
+                    'url': f'/company/{sym}/',
+                    'is_fno': True,
+                    '_local': True,
+                })
+        # Also check instruments cache for name match
+        with _instruments_lock:
+            inst_copy = dict(_upstox_instruments)
+        for sym, ikey in inst_copy.items():
+            if sym not in FNO_STOCKS and (sym.startswith(q_up) or q_up in sym):
+                local_fno.append({
+                    'name': sym,
+                    'symbol': sym,
+                    'url': f'/company/{sym}/',
+                    'is_fno': False,
+                    '_local': True,
+                })
+
+        # ── Screener.in search (network) ──────────────────────────────────
+        remote = []
+        try:
+            results = search_stock(q)
+            if not results: results = search_stock(q_up)
+            if not results: results = search_stock(q.lower())
+            for r in (results or [])[:12]:
+                item = dict(r)
+                url_sym = ''
+                if item.get('url'):
+                    m = re.search(r'/company/([^/]+)/', item['url'])
+                    if m: url_sym = m.group(1).upper()
+                item['symbol'] = url_sym or item.get('symbol', '')
+                item['is_fno'] = item['symbol'] in FNO_STOCKS
+                item['_local'] = False
+                remote.append(item)
+        except Exception as se:
+            print(f'[search] screener error: {se}')
+
+        # ── Merge: remote first, then local not already in remote ─────────
+        seen_syms = {r['symbol'] for r in remote if r.get('symbol')}
+        merged = list(remote)
+        for item in local_fno:
+            if item['symbol'] not in seen_syms:
+                merged.append(item)
+                seen_syms.add(item['symbol'])
+
+        # FNO filter
+        if fno_only:
+            merged = [x for x in merged if x.get('is_fno')]
+
+        # Sort: FNO first, then exact prefix match first
+        def sort_key(x):
+            sym = x.get('symbol', '')
+            is_fno = x.get('is_fno', False)
+            exact_prefix = sym.startswith(q_up)
+            return (0 if is_fno else 1, 0 if exact_prefix else 1, sym)
+
+        merged.sort(key=sort_key)
+        return jsonify(merged[:15])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/fno_stocks')
+def api_fno_stocks():
+    """Return full FNO stocks list for option chain symbol picker"""
+    q = request.args.get('q','').strip().upper()
+    stocks = sorted(FNO_STOCKS)
+    if q:
+        stocks = [s for s in stocks if q in s]
+    return jsonify(stocks)
 
 @app.route('/api/analyze')
 def api_analyze():
@@ -837,13 +905,53 @@ def api_returns(sym):
 
 @app.route('/api/live/<sym>')
 def api_live(sym):
-    try: return jsonify(fetch_nse_live(sym.upper()))
+    sym = sym.upper()
+    # Try Upstox first for live LTP (faster + more accurate)
+    if _upstox_token:
+        try:
+            import requests as _rq
+            ikey = _get_instrument_key(sym)
+            if ikey:
+                ikey_enc = ikey.replace('|','%7C').replace(' ','%20')
+                r = _rq.get(
+                    f'https://api.upstox.com/v2/market-quote/ltp?instrument_key={ikey_enc}',
+                    headers=_upstox_headers(), timeout=5)
+                if r.status_code == 200:
+                    qd = r.json().get('data', {})
+                    if qd:
+                        v = list(qd.values())[0]
+                        ltp = v.get('last_price', 0) or v.get('ltp', 0)
+                        if ltp:
+                            return jsonify({'ltp': ltp, 'symbol': sym, 'source': 'upstox'})
+        except Exception as ex:
+            print(f'[Upstox live] {sym}: {ex}')
+    # Fallback to NSE
+    try: return jsonify(fetch_nse_live(sym))
     except Exception as e: return jsonify({'error':str(e)}),500
 
 @app.route('/api/price/<sym>')
 def api_price(sym):
+    sym = sym.upper()
+    # Try Upstox first
+    if _upstox_token:
+        try:
+            import requests as _rq
+            ikey = _get_instrument_key(sym)
+            if ikey:
+                ikey_enc = ikey.replace('|','%7C').replace(' ','%20')
+                r = _rq.get(
+                    f'https://api.upstox.com/v2/market-quote/ltp?instrument_key={ikey_enc}',
+                    headers=_upstox_headers(), timeout=5)
+                if r.status_code == 200:
+                    qd = r.json().get('data', {})
+                    if qd:
+                        v = list(qd.values())[0]
+                        ltp = v.get('last_price', 0) or v.get('ltp', 0)
+                        if ltp:
+                            return jsonify({'price': ltp, 'symbol': sym, 'source': 'upstox'})
+        except: pass
     try:
-        p=fetch_best_live_price(sym.upper()); return jsonify({'price':p,'symbol':sym.upper()})
+        p=fetch_best_live_price(sym); return jsonify({'price':p,'symbol':sym})
     except Exception as e: return jsonify({'error':str(e)}),500
 
 @app.route('/api/market/<dtype>')
@@ -1298,7 +1406,81 @@ def api_trades_del(sym,idx):
         _save_user_data(ud); return jsonify({'ok':True})
     return jsonify({'error':'not found'}),404
 
-# ── User data sync API ────────────────────────────────────────────────────────
+# ── Trade Alerts (server-side persistent) ────────────────────────────────────
+@app.route('/api/trade_alerts', methods=['GET'])
+def api_trade_alerts_get():
+    """Get all trade alerts for current user"""
+    return jsonify(_user_data().get('trade_alerts', []))
+
+@app.route('/api/trade_alerts', methods=['POST'])
+def api_trade_alerts_add():
+    """Add a new trade alert"""
+    ud = _user_data()
+    data = request.get_json(silent=True) or {}
+    sym = (data.get('sym') or '').upper().strip()
+    price = data.get('price')
+    cond = data.get('cond', 'above')  # above / below
+    note = data.get('note', '')
+    alert_type = data.get('type', 'price')  # price / target / stoploss
+    if not sym or price is None:
+        return jsonify({'error': 'sym aur price required'}), 400
+    try: price = float(price)
+    except: return jsonify({'error': 'Invalid price'}), 400
+    alert = {
+        'id': secrets.token_hex(6),
+        'sym': sym,
+        'price': price,
+        'cond': cond,
+        'type': alert_type,
+        'note': note,
+        'is_fno': sym in FNO_STOCKS,
+        'triggered': False,
+        'triggered_at': None,
+        'created': datetime.datetime.now().isoformat(),
+    }
+    alerts = ud.setdefault('trade_alerts', [])
+    alerts.insert(0, alert)
+    _save_user_data(ud)
+    return jsonify({'ok': True, 'alert': alert})
+
+@app.route('/api/trade_alerts/<alert_id>', methods=['DELETE'])
+def api_trade_alerts_del(alert_id):
+    """Delete a trade alert by id"""
+    ud = _user_data()
+    alerts = ud.get('trade_alerts', [])
+    new_alerts = [a for a in alerts if a.get('id') != alert_id]
+    if len(new_alerts) == len(alerts):
+        return jsonify({'error': 'Alert not found'}), 404
+    ud['trade_alerts'] = new_alerts
+    _save_user_data(ud)
+    return jsonify({'ok': True})
+
+@app.route('/api/trade_alerts/<alert_id>/reset', methods=['POST'])
+def api_trade_alerts_reset(alert_id):
+    """Reset a triggered alert back to active"""
+    ud = _user_data()
+    for a in ud.get('trade_alerts', []):
+        if a.get('id') == alert_id:
+            a['triggered'] = False
+            a['triggered_at'] = None
+            _save_user_data(ud)
+            return jsonify({'ok': True})
+    return jsonify({'error': 'Alert not found'}), 404
+
+@app.route('/api/trade_alerts/<alert_id>/trigger', methods=['POST'])
+def api_trade_alerts_trigger(alert_id):
+    """Mark alert as triggered (called from frontend when price hit)"""
+    ud = _user_data()
+    body = request.get_json(silent=True) or {}
+    ltp = body.get('ltp')
+    for a in ud.get('trade_alerts', []):
+        if a.get('id') == alert_id and not a.get('triggered'):
+            a['triggered'] = True
+            a['triggered_at'] = ltp
+            a['triggered_time'] = datetime.datetime.now().isoformat()
+            _save_user_data(ud)
+            return jsonify({'ok': True})
+    return jsonify({'ok': False, 'reason': 'not found or already triggered'})# ── User data sync API ────────────────────────────────────────────────────────
 @app.route('/api/userdata', methods=['GET'])
 def api_userdata_get():
     """Get all user data for sync"""
@@ -1388,6 +1570,893 @@ def api_screener_explore_fetch(key):
     _explore_cache[key] = {'data': stocks, 'ts': _dt.datetime.now()}
     return jsonify({'key': key, 'label': EXPLORE_SCREENS[key][0],
                     'stocks': stocks, 'cached': False})
+
+# ══════════════════════════════════════════════════════════════════════════════
+# INTRADAY & OPTIONS — NSE Option Chain + Signals
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/intraday/candles')
+def api_intraday_candles():
+    """yfinance se intraday candles — 1m/5m/15m/1h"""
+    sym = request.args.get('sym', 'NIFTY').upper().strip()
+    tf  = request.args.get('tf', '5m')   # 3m/5m/15m/1h
+
+    tf_map = {'3m':'2m','5m':'5m','15m':'15m','1h':'60m'}
+    period_map = {'3m':'1d','5m':'1d','15m':'5d','1h':'5d'}
+    yf_tf  = tf_map.get(tf, '5m')
+    period = period_map.get(tf, '1d')
+
+    # Index symbols
+    idx_map = {
+        'NIFTY':'^NSEI','BANKNIFTY':'^NSEBANK',
+        'FINNIFTY':'NIFTY_FIN_SERVICE.NS','SENSEX':'^BSESN',
+    }
+    yf_sym = idx_map.get(sym, f'{sym}.NS')
+
+    try:
+        import yfinance as yf
+        hist = yf.download(yf_sym, period=period, interval=yf_tf,
+                           auto_adjust=True, progress=False)
+        if hist is None or hist.empty:
+            return jsonify({'error': f'{sym} ka data nahi mila'}), 404
+
+        if hasattr(hist.columns, 'levels'):
+            hist.columns = hist.columns.get_level_values(0)
+        try:
+            hist.index = hist.index.tz_localize(None) if hist.index.tzinfo else hist.index
+        except: pass
+
+        hist = hist.dropna(subset=['Close'])
+        candles = []
+        for ts, row in hist.iterrows():
+            candles.append({
+                't': ts.strftime('%H:%M'),
+                'o': round(float(row['Open']),  2),
+                'h': round(float(row['High']),  2),
+                'l': round(float(row['Low']),   2),
+                'c': round(float(row['Close']), 2),
+                'v': int(row.get('Volume', 0) or 0),
+            })
+        return jsonify({'sym': sym, 'tf': tf, 'candles': candles[-100:]})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/intraday/signals')
+def api_intraday_signals():
+    """Full intraday signal analysis — Upstox for all symbols (indices + stocks), yfinance fallback"""
+    sym = request.args.get('sym', 'NIFTY').upper().strip()
+    tf  = request.args.get('tf', '15m')
+
+    import numpy as np, math
+
+    candles_rs = None
+    data_source = 'unknown'
+
+    # ── Try Upstox first (works for indices + all NSE EQ stocks) ─────────────
+    if _upstox_token:
+        ikey = _get_instrument_key(sym)
+        if ikey:
+            import requests as _rq
+            ikey_enc = ikey.replace('|', '%7C').replace(' ', '%20')
+            try:
+                r = _rq.get(
+                    f'https://api.upstox.com/v2/historical-candle/intraday/{ikey_enc}/1minute',
+                    headers=_upstox_headers(), timeout=15)
+                if r.status_code == 200:
+                    raw = r.json().get('data', {}).get('candles', [])
+                    if raw:
+                        tf_mins = {'3m': 3, '5m': 5, '15m': 15, '1h': 60}.get(tf, 15)
+                        raw.reverse()  # oldest first
+
+                        def resample(candles, mins):
+                            if mins == 1: return candles
+                            out = []; buf = []
+                            for c in candles:
+                                buf.append(c)
+                                if len(buf) >= mins:
+                                    out.append([buf[0][0], buf[0][1],
+                                        max(x[2] for x in buf), min(x[3] for x in buf),
+                                        buf[-1][4], sum(x[5] for x in buf), buf[-1][6]])
+                                    buf = []
+                            if buf:
+                                out.append([buf[0][0], buf[0][1],
+                                    max(x[2] for x in buf), min(x[3] for x in buf),
+                                    buf[-1][4], sum(x[5] for x in buf), buf[-1][6]])
+                            return out
+
+                        candles_rs = resample(raw, tf_mins)
+                        data_source = 'Upstox'
+                elif r.status_code == 400:
+                    print(f'[Upstox signals] 400 for {sym} ({ikey}): {r.text[:120]}')
+            except Exception as ex:
+                print(f'[Upstox signals] {sym}: {ex}')
+        else:
+            print(f'[Upstox] No instrument key for {sym} — falling back to yfinance')
+
+    # ── yfinance fallback ─────────────────────────────────────────────────────
+    if not candles_rs:
+        try:
+            import yfinance as yf
+            tf_map     = {'3m': '2m', '5m': '5m', '15m': '15m', '1h': '60m'}
+            period_map = {'3m': '1d', '5m': '1d',  '15m': '5d',  '1h': '5d'}
+            yf_tf  = tf_map.get(tf, '15m')
+            period = period_map.get(tf, '5d')
+            idx_map = {
+                'NIFTY': '^NSEI', 'BANKNIFTY': '^NSEBANK',
+                'FINNIFTY': 'NIFTY_FIN_SERVICE.NS', 'SENSEX': '^BSESN',
+                'MIDCPNIFTY': 'NIFTY_MID_SELECT.NS',
+            }
+            yf_sym = idx_map.get(sym, f'{sym}.NS')
+            hist = yf.download(yf_sym, period=period, interval=yf_tf,
+                               auto_adjust=True, progress=False)
+            if hist is None or hist.empty:
+                return jsonify({'error': f'{sym} ka data nahi mila — symbol check karo'}), 404
+            if hasattr(hist.columns, 'levels'):
+                hist.columns = hist.columns.get_level_values(0)
+            try:
+                hist.index = hist.index.tz_localize(None) if hist.index.tzinfo else hist.index
+            except: pass
+            hist = hist.dropna(subset=['Close', 'High', 'Low'])
+            if len(hist) < 5:
+                return jsonify({'error': f'{sym} ka data bahut kam — market band hoga'}), 404
+            # Convert to candles_rs format: [ts, open, high, low, close, volume, 0]
+            candles_rs = []
+            for i, row in hist.iterrows():
+                candles_rs.append([
+                    str(i), float(row.get('Open', row['Close'])),
+                    float(row['High']), float(row['Low']),
+                    float(row['Close']),
+                    float(row.get('Volume', 0)), 0
+                ])
+        except Exception as ex:
+            import traceback; traceback.print_exc()
+            return jsonify({'error': f'Data fetch failed: {str(ex)}'}), 500
+
+    if not candles_rs or len(candles_rs) < 5:
+        return jsonify({'error': f'{sym} ka data nahi mila — market band hoga ya symbol galat hai'}), 404
+
+    try:
+        c = np.array([x[4] for x in candles_rs], dtype=float)
+        h = np.array([x[2] for x in candles_rs], dtype=float)
+        l = np.array([x[3] for x in candles_rs], dtype=float)
+        o = np.array([x[1] for x in candles_rs], dtype=float)
+        v = np.array([x[5] for x in candles_rs], dtype=float)
+        n = len(c)
+
+        def ema(arr, p):
+            k = 2/(p+1); e = [arr[0]]
+            for x in arr[1:]: e.append(x*k + e[-1]*(1-k))
+            return np.array(e)
+
+        def rsi(arr, p=14):
+            d = np.diff(arr)
+            g = np.where(d>0,d,0); ls = np.where(d<0,-d,0)
+            ag = np.mean(g[:p]); al = np.mean(ls[:p])
+            for i in range(p, len(d)):
+                ag=(ag*(p-1)+g[i])/p; al=(al*(p-1)+ls[i])/p
+            return round(100-100/(1+ag/al),1) if al>0 else 100.0
+
+        ema9=ema(c,9); ema21=ema(c,21)
+        rsi_val = rsi(c) if n > 14 else 50.0
+
+        # VWAP
+        tp = (h+l+c)/3
+        cum_vol = np.cumsum(v)
+        vwap = round(float(np.sum(tp*v)/cum_vol[-1]),2) if cum_vol[-1]>0 else None
+
+        # Supertrend
+        atr_p=10; mult=3.0
+        tr = np.array([max(h[i]-l[i],abs(h[i]-c[i-1]),abs(l[i]-c[i-1])) for i in range(1,n)])
+        atr_arr=np.zeros(n); atr_arr[1]=tr[0] if len(tr)>0 else 0
+        for i in range(2,n): atr_arr[i]=(atr_arr[i-1]*(atr_p-1)+tr[i-1])/atr_p
+        ub=(h+l)/2+mult*atr_arr; lb=(h+l)/2-mult*atr_arr
+        trend=np.ones(n)
+        for i in range(1,n):
+            if c[i]>ub[i-1]: trend[i]=1
+            elif c[i]<lb[i-1]: trend[i]=-1
+            else: trend[i]=trend[i-1]
+        st=np.where(trend==1,lb,ub)
+        st_signal='BUY' if trend[-1]==1 else 'SELL'
+        st_val=round(float(st[-1]),2)
+
+        # MACD
+        ema12=ema(c,12); ema26=ema(c,26)
+        macd_line=ema12-ema26
+        sig_line=ema(macd_line[25:],9) if n>25 else np.array([0])
+        macd_val=round(float(macd_line[-1]),2); sig_val=round(float(sig_line[-1]),2)
+        macd_cross='Bullish' if macd_val>sig_val else 'Bearish'
+
+        # ORB
+        orb=None
+        if n>=3:
+            orb_h=float(np.max(h[:3])); orb_l=float(np.min(l[:3]))
+            cur=float(c[-1])
+            orb_status='ABOVE ORB 🚀' if cur>orb_h else ('BELOW ORB 📉' if cur<orb_l else 'INSIDE ORB ⏳')
+            orb={'high':round(orb_h,2),'low':round(orb_l,2),'status':orb_status}
+
+        # BB
+        bb_mid=bb_upper=bb_lower=bb_pct=None
+        if n>=20:
+            w=c[-20:]; bb_mid=round(float(np.mean(w)),2); bb_std=float(np.std(w))
+            bb_upper=round(bb_mid+2*bb_std,2); bb_lower=round(bb_mid-2*bb_std,2)
+            rng=bb_upper-bb_lower
+            bb_pct=round((float(c[-1])-bb_lower)/rng*100,1) if rng>0 else 50
+
+        avg_vol=float(np.mean(v[-20:])) if n>=20 else float(np.mean(v))
+        vol_ratio=round(float(v[-1])/avg_vol,2) if avg_vol>0 else 1.0
+        atr_val=round(float(atr_arr[-1]),2)
+        cur=float(c[-1])
+
+        # Score
+        score=0; bull=[]; bear=[]
+        if 40<=rsi_val<=65: score+=20; bull.append(f'RSI {rsi_val} — momentum zone')
+        elif rsi_val>65: score+=8; bear.append(f'RSI {rsi_val} — overbought')
+        elif rsi_val<35: score+=5; bear.append(f'RSI {rsi_val} — oversold')
+        else: score+=10
+        if float(ema9[-1])>float(ema21[-1]): score+=20; bull.append('EMA9 > EMA21 — bullish')
+        else: bear.append('EMA9 < EMA21 — bearish')
+        if vwap:
+            if cur>vwap: score+=20; bull.append(f'Price above VWAP ({vwap})')
+            else: score+=5; bear.append(f'Price below VWAP ({vwap})')
+        if st_signal=='BUY': score+=25; bull.append(f'Supertrend BUY @ {st_val}')
+        else: bear.append(f'Supertrend SELL @ {st_val}')
+        if macd_cross=='Bullish': score+=15; bull.append('MACD bullish')
+        else: bear.append('MACD bearish')
+        score=min(score,100)
+
+        if score>=75: verdict='STRONG BUY'; vtype='strong_buy'; hint='CALL option consider karo'
+        elif score>=60: verdict='BUY'; vtype='buy'; hint='CALL option — confirm karo pehle'
+        elif score<=25: verdict='STRONG SELL'; vtype='strong_sell'; hint='PUT option consider karo'
+        elif score<=40: verdict='SELL / AVOID'; vtype='sell'; hint='PUT option — confirm karo pehle'
+        else: verdict='NEUTRAL / WAIT'; vtype='neutral'; hint='Sideline raho — clear signal nahi'
+
+        sl_buy=round(cur-1.5*atr_val,2); tgt_buy=round(cur+2*atr_val,2)
+        sl_sell=round(cur+1.5*atr_val,2); tgt_sell=round(cur-2*atr_val,2)
+
+        chart_candles=[]
+        for i in range(max(0,n-60),n):
+            ts = candles_rs[i][0]
+            if hasattr(ts, 'strftime'): ts = ts.strftime('%H:%M')
+            elif isinstance(ts, str): ts = ts[:16].replace('T',' ').replace('+05:30','')
+            chart_candles.append({
+                't': ts, 'o':round(float(o[i]),2),'h':round(float(h[i]),2),
+                'l':round(float(l[i]),2),'c':round(float(c[i]),2),
+                'v':int(v[i]),
+                'ema9':round(float(ema9[i]),2),'ema21':round(float(ema21[i]),2),
+                'st':round(float(st[i]),2),'st_up':bool(trend[i]==1),'vwap':vwap,
+            })
+
+        data_source = 'Upstox' if data_source == 'Upstox' else 'yfinance'
+        return jsonify({
+            'sym':sym,'tf':tf,'cur':round(cur,2),
+            'rsi':rsi_val,'ema9':round(float(ema9[-1]),2),'ema21':round(float(ema21[-1]),2),
+            'vwap':vwap,'macd':macd_val,'macd_signal':sig_val,'macd_cross':macd_cross,
+            'supertrend':st_val,'supertrend_signal':st_signal,
+            'bb_upper':bb_upper,'bb_lower':bb_lower,'bb_mid':bb_mid,'bb_pct':bb_pct,
+            'atr':atr_val,'vol_ratio':vol_ratio,'orb':orb,'score':score,
+            'verdict':verdict,'verdict_type':vtype,'option_hint':hint,
+            'bull_reasons':bull,'bear_reasons':bear,
+            'sl_buy':sl_buy,'tgt_buy':tgt_buy,'sl_sell':sl_sell,'tgt_sell':tgt_sell,
+            'candles':chart_candles,'data_source':data_source,
+        })
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+        # raw format: [timestamp, open, high, low, close, volume, oi]
+        # Resample to requested timeframe
+        tf_mins = {'3m': 3, '5m': 5, '15m': 15, '1h': 60}.get(tf, 15)
+        raw.reverse()  # oldest first
+
+        def resample(candles, mins):
+            if mins == 1: return candles
+            out = []
+            buf = []
+            for c in candles:
+                buf.append(c)
+                if len(buf) >= mins:
+                    out.append([
+                        buf[0][0],
+                        buf[0][1],           # open
+                        max(x[2] for x in buf),  # high
+                        min(x[3] for x in buf),  # low
+                        buf[-1][4],          # close
+                        sum(x[5] for x in buf),  # volume
+                        buf[-1][6],          # oi
+                    ])
+                    buf = []
+            if buf:  # partial last candle
+                out.append([buf[0][0], buf[0][1], max(x[2] for x in buf),
+                            min(x[3] for x in buf), buf[-1][4],
+                            sum(x[5] for x in buf), buf[-1][6]])
+            return out
+
+        candles_rs = resample(raw, tf_mins)
+        if len(candles_rs) < 20:
+            return jsonify({'error': f'Data bahut kam ({len(candles_rs)} candles) — 15m ya 1h try karo'}), 400
+
+        c = np.array([x[4] for x in candles_rs], dtype=float)
+        h = np.array([x[2] for x in candles_rs], dtype=float)
+        l = np.array([x[3] for x in candles_rs], dtype=float)
+        o = np.array([x[1] for x in candles_rs], dtype=float)
+        v = np.array([x[5] for x in candles_rs], dtype=float)
+        n = len(c)
+
+        def ema(arr, p):
+            k = 2/(p+1); e = [arr[0]]
+            for x in arr[1:]: e.append(x*k + e[-1]*(1-k))
+            return np.array(e)
+
+        def rsi(arr, p=14):
+            d = np.diff(arr)
+            g = np.where(d>0,d,0); ls = np.where(d<0,-d,0)
+            ag = np.mean(g[:p]); al = np.mean(ls[:p])
+            for i in range(p, len(d)):
+                ag=(ag*(p-1)+g[i])/p; al=(al*(p-1)+ls[i])/p
+            return round(100-100/(1+ag/al),1) if al>0 else 100.0
+
+        ema9=ema(c,9); ema21=ema(c,21)
+        rsi_val = rsi(c)
+
+        # VWAP (today)
+        tp = (h+l+c)/3
+        cum_vol = np.cumsum(v)
+        vwap = round(float(np.sum(tp*v)/cum_vol[-1]),2) if cum_vol[-1]>0 else None
+
+        # Supertrend
+        atr_p=10; mult=3.0
+        tr = np.array([max(h[i]-l[i],abs(h[i]-c[i-1]),abs(l[i]-c[i-1])) for i in range(1,n)])
+        atr_arr=np.zeros(n); atr_arr[1]=tr[0]
+        for i in range(2,n): atr_arr[i]=(atr_arr[i-1]*(atr_p-1)+tr[i-1])/atr_p
+        ub=(h+l)/2+mult*atr_arr; lb=(h+l)/2-mult*atr_arr
+        trend=np.ones(n)
+        for i in range(1,n):
+            if c[i]>ub[i-1]: trend[i]=1
+            elif c[i]<lb[i-1]: trend[i]=-1
+            else: trend[i]=trend[i-1]
+        st=np.where(trend==1,lb,ub)
+        st_signal='BUY' if trend[-1]==1 else 'SELL'
+        st_val=round(float(st[-1]),2)
+
+        # MACD
+        ema12=ema(c,12); ema26=ema(c,26)
+        macd_line=ema12-ema26
+        sig_line=ema(macd_line[25:],9) if n>25 else np.array([0])
+        macd_val=round(float(macd_line[-1]),2); sig_val=round(float(sig_line[-1]),2)
+        macd_cross='Bullish' if macd_val>sig_val else 'Bearish'
+
+        # ORB (first 3 candles of day)
+        orb=None
+        if n>=3:
+            orb_h=float(np.max(h[:3])); orb_l=float(np.min(l[:3]))
+            cur=float(c[-1])
+            orb_status='ABOVE ORB' if cur>orb_h else ('BELOW ORB' if cur<orb_l else 'INSIDE ORB')
+            orb={'high':round(orb_h,2),'low':round(orb_l,2),'status':orb_status}
+
+        # BB
+        bb_mid=bb_upper=bb_lower=bb_pct=None
+        if n>=20:
+            w=c[-20:]; bb_mid=round(float(np.mean(w)),2); bb_std=float(np.std(w))
+            bb_upper=round(bb_mid+2*bb_std,2); bb_lower=round(bb_mid-2*bb_std,2)
+            rng=bb_upper-bb_lower
+            bb_pct=round((float(c[-1])-bb_lower)/rng*100,1) if rng>0 else 50
+
+        avg_vol=float(np.mean(v[-20:])) if n>=20 else float(np.mean(v))
+        vol_ratio=round(float(v[-1])/avg_vol,2) if avg_vol>0 else 1.0
+        atr_val=round(float(atr_arr[-1]),2)
+        cur=float(c[-1])
+
+        # Score
+        score=0; bull=[]; bear=[]
+        if 40<=rsi_val<=65: score+=20; bull.append(f'RSI {rsi_val} — momentum zone')
+        elif rsi_val>65: score+=8; bear.append(f'RSI {rsi_val} — overbought')
+        elif rsi_val<35: score+=5; bear.append(f'RSI {rsi_val} — oversold')
+        else: score+=10
+        if float(ema9[-1])>float(ema21[-1]): score+=20; bull.append('EMA9 > EMA21 — bullish')
+        else: bear.append('EMA9 < EMA21 — bearish')
+        if vwap:
+            if cur>vwap: score+=20; bull.append(f'Price above VWAP ({vwap})')
+            else: score+=5; bear.append(f'Price below VWAP ({vwap})')
+        if st_signal=='BUY': score+=25; bull.append(f'Supertrend BUY @ {st_val}')
+        else: bear.append(f'Supertrend SELL @ {st_val}')
+        if macd_cross=='Bullish': score+=15; bull.append('MACD bullish')
+        else: bear.append('MACD bearish')
+        score=min(score,100)
+
+        if score>=75: verdict='STRONG BUY'; vtype='strong_buy'; hint='CALL option consider karo'
+        elif score>=60: verdict='BUY'; vtype='buy'; hint='CALL option — confirm karo pehle'
+        elif score<=25: verdict='STRONG SELL'; vtype='strong_sell'; hint='PUT option consider karo'
+        elif score<=40: verdict='SELL / AVOID'; vtype='sell'; hint='PUT option — confirm karo pehle'
+        else: verdict='NEUTRAL / WAIT'; vtype='neutral'; hint='Sideline raho — clear signal nahi'
+
+        sl_buy=round(cur-1.5*atr_val,2); tgt_buy=round(cur+2*atr_val,2)
+        sl_sell=round(cur+1.5*atr_val,2); tgt_sell=round(cur-2*atr_val,2)
+
+        chart_candles=[]
+        for i in range(max(0,n-60),n):
+            chart_candles.append({
+                't': candles_rs[i][0][:16].replace('T',' ').replace('+05:30',''),
+                'o':round(float(o[i]),2),'h':round(float(h[i]),2),
+                'l':round(float(l[i]),2),'c':round(float(c[i]),2),
+                'v':int(v[i]),
+                'ema9':round(float(ema9[i]),2),'ema21':round(float(ema21[i]),2),
+                'st':round(float(st[i]),2),'st_up':bool(trend[i]==1),'vwap':vwap,
+            })
+
+        return jsonify({
+            'sym':sym,'tf':tf,'cur':round(cur,2),
+            'rsi':rsi_val,'ema9':round(float(ema9[-1]),2),'ema21':round(float(ema21[-1]),2),
+            'vwap':vwap,'macd':macd_val,'macd_signal':sig_val,'macd_cross':macd_cross,
+            'supertrend':st_val,'supertrend_signal':st_signal,
+            'bb_upper':bb_upper,'bb_lower':bb_lower,'bb_mid':bb_mid,'bb_pct':bb_pct,
+            'atr':atr_val,'vol_ratio':vol_ratio,'orb':orb,'score':score,
+            'verdict':verdict,'verdict_type':vtype,'option_hint':hint,
+            'bull_reasons':bull,'bear_reasons':bear,
+            'sl_buy':sl_buy,'tgt_buy':tgt_buy,'sl_sell':sl_sell,'tgt_sell':tgt_sell,
+            'candles':chart_candles,
+        })
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UPSTOX API — Token Management
+# ══════════════════════════════════════════════════════════════════════════════
+_UPSTOX_TOKEN_FILE = os.path.join(BASE, 'upstox_token.json')
+_upstox_token = ''
+
+def _load_upstox_token():
+    global _upstox_token
+    try:
+        if os.path.exists(_UPSTOX_TOKEN_FILE):
+            with open(_UPSTOX_TOKEN_FILE) as f:
+                d = json.load(f)
+                _upstox_token = d.get('token', '')
+    except: pass
+
+def _save_upstox_token(token):
+    global _upstox_token
+    _upstox_token = token
+    try:
+        with open(_UPSTOX_TOKEN_FILE, 'w') as f:
+            json.dump({'token': token}, f)
+    except: pass
+
+_load_upstox_token()
+
+def _upstox_headers():
+    return {'Authorization': f'Bearer {_upstox_token}', 'Accept': 'application/json'}
+
+# ── Upstox Instrument Key Cache ───────────────────────────────────────────────
+# Format: { 'RELIANCE': 'NSE_EQ|INE002A01018', 'TCS': 'NSE_EQ|INE467B01029', ... }
+_UPSTOX_INSTRUMENTS_FILE = os.path.join(BASE, 'upstox_instruments.json')
+_upstox_instruments: dict = {}      # symbol → EQ instrument_key (for signals/live price)
+_upstox_fo_instruments: dict = {}   # symbol → FO instrument_key (for option chain) — currently same as EQ
+_instruments_lock = threading.Lock()
+
+def _load_instruments_cache():
+    global _upstox_instruments, _upstox_fo_instruments
+    try:
+        if os.path.exists(_UPSTOX_INSTRUMENTS_FILE):
+            with open(_UPSTOX_INSTRUMENTS_FILE) as f:
+                data = json.load(f)
+            # Support both old format (flat dict) and new format ({'eq':..., 'fo':...})
+            if isinstance(data, dict) and 'eq' in data:
+                _upstox_instruments    = data.get('eq', {})
+                _upstox_fo_instruments = data.get('fo', {})
+            else:
+                _upstox_instruments    = data  # old flat format
+                _upstox_fo_instruments = {}
+            print(f'[Upstox] Instruments cache loaded: {len(_upstox_instruments)} EQ symbols')
+    except Exception as ex:
+        print(f'[Upstox] Cache load error: {ex}')
+
+def _save_instruments_cache():
+    try:
+        with open(_UPSTOX_INSTRUMENTS_FILE, 'w') as f:
+            json.dump({'eq': _upstox_instruments, 'fo': _upstox_fo_instruments}, f)
+    except Exception as ex:
+        print(f'[Upstox] Cache save error: {ex}')
+
+def _fetch_upstox_instruments():
+    """
+    Download Upstox NSE instruments CSV and build two maps:
+    - _upstox_instruments:    symbol → EQ instrument_key  (for live price / signals / option chain)
+    - _upstox_fo_instruments: symbol → lot_size           (for FNO info)
+    Upstox public CSV (no auth needed):
+      https://assets.upstox.com/market-quote/instruments/exchange/NSE.csv.gz
+    instrument_type values: EQUITY, OPTSTK, OPTIDX, FUTSTK, FUTIDX, etc.
+    """
+    global _upstox_instruments, _upstox_fo_instruments
+    import requests as _rq, gzip, io, csv
+
+    url = 'https://assets.upstox.com/market-quote/instruments/exchange/NSE.csv.gz'
+    print('[Upstox] Downloading instruments CSV...')
+    try:
+        r = _rq.get(url, timeout=30)
+        if r.status_code != 200:
+            print(f'[Upstox] Instruments download failed: {r.status_code}')
+            return False
+
+        with gzip.open(io.BytesIO(r.content), 'rt', encoding='utf-8') as gz:
+            reader = csv.DictReader(gz)
+            eq_map  = {}   # symbol → NSE_EQ instrument_key
+            lot_map = {}   # symbol → lot_size (from FUTSTK rows)
+            for row in reader:
+                itype = row.get('instrument_type', '').strip().upper()
+                sym   = row.get('tradingsymbol', '').strip().upper()
+                ikey  = row.get('instrument_key', '').strip()
+                if not sym or not ikey:
+                    continue
+                # EQUITY rows → EQ instrument key (used for signals + option chain)
+                if itype == 'EQUITY':
+                    eq_map[sym] = ikey
+                # FUTSTK rows → get lot size for FNO stocks
+                elif itype == 'FUTSTK':
+                    try:
+                        lot_map[sym] = int(float(row.get('lot_size', 0)))
+                    except: pass
+
+        with _instruments_lock:
+            _upstox_instruments    = eq_map
+            _upstox_fo_instruments = lot_map
+
+        # Save both maps
+        try:
+            with open(_UPSTOX_INSTRUMENTS_FILE, 'w') as f:
+                json.dump({'eq': eq_map, 'fo': lot_map}, f)
+        except Exception as ex:
+            print(f'[Upstox] Cache save error: {ex}')
+
+        print(f'[Upstox] Instruments refreshed: {len(eq_map)} EQ symbols, {len(lot_map)} FNO stocks')
+        return True
+    except Exception as ex:
+        import traceback; traceback.print_exc()
+        print(f'[Upstox] Instruments fetch error: {ex}')
+        return False
+
+def _get_instrument_key(sym: str) -> str:
+    """
+    Return Upstox instrument_key for a symbol.
+    Indices use hardcoded keys; stocks use the downloaded CSV cache.
+    """
+    # Indices — hardcoded
+    idx_keys = {
+        'NIFTY':      'NSE_INDEX|Nifty 50',
+        'BANKNIFTY':  'NSE_INDEX|Nifty Bank',
+        'FINNIFTY':   'NSE_INDEX|Nifty Fin Service',
+        'MIDCPNIFTY': 'NSE_INDEX|NIFTY MID SELECT',
+        'SENSEX':     'BSE_INDEX|SENSEX',
+    }
+    if sym in idx_keys:
+        return idx_keys[sym]
+
+    # Stocks — from CSV cache
+    with _instruments_lock:
+        key = _upstox_instruments.get(sym)
+    if key:
+        return key
+
+    # Cache miss — try to refresh once
+    if _upstox_instruments:
+        return ''   # cache loaded but sym not found
+    # Cache empty — download now (blocking, first time only)
+    _fetch_upstox_instruments()
+    with _instruments_lock:
+        return _upstox_instruments.get(sym, '')
+
+# Load cache on startup; refresh in background if stale (>1 day old)
+_load_instruments_cache()
+
+def _maybe_refresh_instruments():
+    """Refresh instruments CSV in background if cache is empty or >24h old."""
+    if not _upstox_instruments:
+        threading.Thread(target=_fetch_upstox_instruments, daemon=True).start()
+        return
+    try:
+        mtime = os.path.getmtime(_UPSTOX_INSTRUMENTS_FILE)
+        age_h = (datetime.datetime.now().timestamp() - mtime) / 3600
+        if age_h > 24:
+            threading.Thread(target=_fetch_upstox_instruments, daemon=True).start()
+    except: pass
+
+_maybe_refresh_instruments()
+
+# Upstox instrument keys (legacy — kept for compat, use _get_instrument_key() instead)
+_UPSTOX_IDX = {
+    'NIFTY':      'NSE_INDEX|Nifty 50',
+    'BANKNIFTY':  'NSE_INDEX|Nifty Bank',
+    'FINNIFTY':   'NSE_INDEX|Nifty Fin Service',
+    'MIDCPNIFTY': 'NSE_INDEX|NIFTY MID SELECT',
+    'SENSEX':     'BSE_INDEX|SENSEX',
+}
+
+# Upstox option chain instrument keys (different from quote keys)
+_UPSTOX_OC_IDX = {
+    'NIFTY':      'NSE_INDEX|Nifty 50',
+    'BANKNIFTY':  'NSE_INDEX|Nifty Bank',
+    'FINNIFTY':   'NSE_INDEX|Nifty Fin Service',
+    'MIDCPNIFTY': 'NSE_INDEX|NIFTY MID SELECT',
+    'SENSEX':     'BSE_INDEX|SENSEX',
+}
+
+@app.route('/api/upstox/refresh_instruments', methods=['POST'])
+def api_refresh_instruments():
+    """Manually refresh Upstox instruments CSV cache"""
+    ok = _fetch_upstox_instruments()
+    return jsonify({'ok': ok, 'count': len(_upstox_instruments)})
+
+@app.route('/api/upstox/instruments_status')
+def api_instruments_status():
+    """Check instruments cache status"""
+    age_h = None
+    try:
+        if os.path.exists(_UPSTOX_INSTRUMENTS_FILE):
+            mtime = os.path.getmtime(_UPSTOX_INSTRUMENTS_FILE)
+            age_h = round((datetime.datetime.now().timestamp() - mtime) / 3600, 1)
+    except: pass
+    with _instruments_lock:
+        eq_count = len(_upstox_instruments)
+        fo_count = len(_upstox_fo_instruments)
+        sample   = dict(list(_upstox_instruments.items())[:5])
+    return jsonify({
+        'loaded':    bool(_upstox_instruments),
+        'count':     eq_count,
+        'fo_count':  fo_count,
+        'age_hours': age_h,
+        'sample':    sample,
+    })
+
+@app.route('/api/upstox/token', methods=['POST'])
+def api_upstox_set_token():
+    data = request.get_json(silent=True) or {}
+    token = data.get('token', '').strip()
+    if not token:
+        return jsonify({'error': 'Token required'}), 400
+    # Quick validate
+    import requests as _rq
+    r = _rq.get('https://api.upstox.com/v2/market-quote/quotes?instrument_key=NSE_INDEX|Nifty%2050',
+                headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'}, timeout=8)
+    if r.status_code != 200:
+        return jsonify({'error': f'Token invalid — Upstox returned {r.status_code}'}), 400
+    _save_upstox_token(token)
+    return jsonify({'ok': True, 'message': 'Token saved!'})
+
+@app.route('/api/upstox/status')
+def api_upstox_status():
+    if not _upstox_token:
+        return jsonify({'ok': False, 'message': 'Token not set'})
+    try:
+        import requests as _rq
+        r = _rq.get('https://api.upstox.com/v2/market-quote/quotes?instrument_key=NSE_INDEX|Nifty%2050',
+                    headers=_upstox_headers(), timeout=8)
+        if r.status_code == 200:
+            d = r.json().get('data', {})
+            spot = list(d.values())[0].get('ohlc', {}).get('close', 0) if d else 0
+            return jsonify({'ok': True, 'message': 'Connected', 'nifty_spot': spot})
+        return jsonify({'ok': False, 'message': f'Token expired or invalid ({r.status_code})'})
+    except Exception as e:
+        return jsonify({'ok': False, 'message': str(e)})
+_OC_COOKIES_FILE = os.path.join(BASE, 'nse_oc_cookies.json')  # kept for compat
+
+def _upstox_get_nearest_expiry(sym):
+    """
+    Get nearest expiry option chain from Upstox.
+    For indices: use NSE_INDEX keys.
+    For stocks: use NSE_EQ|ISIN key — Upstox option chain API accepts EQ keys for FNO stocks.
+    Tries next 45 days to find a valid expiry.
+    """
+    import requests as _rq, datetime as _dt
+
+    # Get the right instrument key
+    ikey = _get_instrument_key(sym)
+    if not ikey:
+        print(f'[OC] No instrument key for {sym} — instruments cache empty? Refresh karo.')
+        return None, []
+
+    ikey_enc = ikey.replace('|', '%7C').replace(' ', '%20')
+    today = _dt.date.today()
+
+    print(f'[OC] Fetching option chain for {sym} using key: {ikey}')
+
+    for delta in range(0, 45):
+        exp = (today + _dt.timedelta(days=delta)).strftime('%Y-%m-%d')
+        try:
+            r = _rq.get(
+                f'https://api.upstox.com/v2/option/chain?instrument_key={ikey_enc}&expiry_date={exp}',
+                headers=_upstox_headers(), timeout=10)
+            if r.status_code == 200:
+                data = r.json().get('data', [])
+                if data:
+                    print(f'[OC] Found expiry {exp} for {sym} — {len(data)} strikes')
+                    return exp, data
+            elif r.status_code == 400:
+                # Bad request — key might be wrong, log and stop
+                print(f'[OC] 400 for {sym} ({ikey}): {r.text[:150]}')
+                break
+        except Exception as ex:
+            print(f'[OC] {sym} expiry {exp}: {ex}')
+            continue
+
+    return None, []
+
+
+@app.route('/api/intraday/set_cookies', methods=['POST'])
+def api_set_oc_cookies():
+    """Legacy — redirect to Upstox token setup"""
+    return jsonify({'error': 'NSE cookies deprecated. Use /api/upstox/token instead'}), 410
+
+
+@app.route('/api/intraday/cookie_status')
+def api_oc_cookie_status():
+    """Check Upstox token status"""
+    if not _upstox_token:
+        return jsonify({'has_cookies': False, 'has_nsit': False, 'working': False,
+                        'message': 'Upstox token not set'})
+    try:
+        import requests as _rq
+        r = _rq.get('https://api.upstox.com/v2/market-quote/quotes?instrument_key=NSE_INDEX|Nifty%2050',
+                    headers=_upstox_headers(), timeout=8)
+        working = r.status_code == 200
+        return jsonify({'has_cookies': True, 'has_nsit': True, 'working': working,
+                        'message': 'Upstox connected' if working else 'Token expired'})
+    except Exception as e:
+        return jsonify({'has_cookies': False, 'has_nsit': False, 'working': False, 'message': str(e)})
+
+
+@app.route('/api/intraday/optionchain')
+def api_option_chain():
+    """Option Chain via Upstox API"""
+    sym = request.args.get('sym', 'NIFTY').upper().strip()
+    if not _upstox_token:
+        return jsonify({'error': 'Upstox token not set — ⚙️ Upstox tab mein token add karo'}), 503
+
+    # Check if we have instrument key
+    ikey_check = _get_instrument_key(sym)
+    if not ikey_check:
+        return jsonify({'error': f'{sym} ka instrument key nahi mila — ⚙️ Upstox tab → "Refresh Instruments" click karo'}), 404
+
+    try:
+        import requests as _rq
+        expiry, data = _upstox_get_nearest_expiry(sym)
+        if not data:
+            return jsonify({'error': f'{sym} ka option chain nahi mila. Possible reasons:\n1. {sym} FNO mein nahi hai\n2. Upstox token expire ho gaya — refresh karo\n3. Market band hai — expiry data unavailable'}), 404
+
+        # Get spot price
+        ikey = _get_instrument_key(sym) or _UPSTOX_IDX.get(sym, 'NSE_INDEX|Nifty 50')
+        ikey_enc = ikey.replace('|','%7C').replace(' ','%20')
+        spot = 0
+        try:
+            rq = _rq.get(f'https://api.upstox.com/v2/market-quote/quotes?instrument_key={ikey_enc}',
+                         headers=_upstox_headers(), timeout=8)
+            if rq.status_code == 200:
+                qd = rq.json().get('data', {})
+                if qd:
+                    spot = list(qd.values())[0].get('ohlc', {}).get('close', 0)
+        except: pass
+
+        chain = []
+        for item in data:
+            ce = item.get('call_options', {}).get('market_data', {})
+            pe = item.get('put_options',  {}).get('market_data', {})
+            strike = item.get('strike_price', 0)
+            ce_oi = ce.get('oi', 0) or 0
+            pe_oi = pe.get('oi', 0) or 0
+            ce_prev = ce.get('prev_oi', 0) or 0
+            pe_prev = pe.get('prev_oi', 0) or 0
+            chain.append({
+                'strike':    strike,
+                'ce_ltp':    ce.get('ltp', 0) or 0,
+                'ce_oi':     ce_oi,
+                'ce_chg_oi': round(ce_oi - ce_prev, 0),
+                'ce_iv':     ce.get('iv', 0) or 0,
+                'ce_vol':    ce.get('volume', 0) or 0,
+                'pe_ltp':    pe.get('ltp', 0) or 0,
+                'pe_oi':     pe_oi,
+                'pe_chg_oi': round(pe_oi - pe_prev, 0),
+                'pe_iv':     pe.get('iv', 0) or 0,
+                'pe_vol':    pe.get('volume', 0) or 0,
+            })
+
+        chain.sort(key=lambda x: x['strike'])
+        total_ce_oi = sum(x['ce_oi'] for x in chain)
+        total_pe_oi = sum(x['pe_oi'] for x in chain)
+        pcr = round(total_pe_oi / total_ce_oi, 3) if total_ce_oi > 0 else 0
+        max_pain = _calc_max_pain(chain)
+        atm = min(chain, key=lambda x: abs(x['strike'] - spot))['strike'] if chain and spot else 0
+
+        return jsonify({
+            'sym': sym, 'spot': spot, 'expiry': expiry,
+            'expiry_dates': [expiry], 'atm': atm,
+            'pcr': pcr, 'max_pain': max_pain,
+            'total_ce_oi': total_ce_oi, 'total_pe_oi': total_pe_oi,
+            'chain': chain,
+        })
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+def _calc_max_pain(chain):
+    if not chain: return 0
+    strikes = [x['strike'] for x in chain]
+    min_loss = float('inf'); max_pain = strikes[0]
+    for s in strikes:
+        loss = sum(max(0, k-s)*x['ce_oi'] + max(0, s-k)*x['pe_oi']
+                   for x, k in [(x, x['strike']) for x in chain])
+        if loss < min_loss:
+            min_loss = loss; max_pain = s
+    return max_pain
+
+
+@app.route('/api/intraday/pcr')
+def api_pcr_oi():
+    """PCR + OI analysis via Upstox"""
+    sym = request.args.get('sym', 'NIFTY').upper().strip()
+    if not _upstox_token:
+        return jsonify({'error': 'Upstox token not set'}), 503
+    try:
+        expiry, data = _upstox_get_nearest_expiry(sym)
+        if not data:
+            return jsonify({'error': f'{sym} ka data nahi mila — Upstox token expire ho gaya hoga. Token refresh karo.'}), 404
+
+        ikey = _get_instrument_key(sym) or _UPSTOX_IDX.get(sym, 'NSE_INDEX|Nifty 50')
+        ikey_enc = ikey.replace('|','%7C').replace(' ','%20')
+        spot = 0
+        try:
+            import requests as _rq
+            rq = _rq.get(f'https://api.upstox.com/v2/market-quote/quotes?instrument_key={ikey_enc}',
+                         headers=_upstox_headers(), timeout=8)
+            if rq.status_code == 200:
+                qd = rq.json().get('data', {})
+                if qd: spot = list(qd.values())[0].get('ohlc', {}).get('close', 0)
+        except: pass
+
+        ce_oi = pe_oi = ce_vol = pe_vol = ce_chg = pe_chg = 0
+        top_ce = []; top_pe = []
+
+        for item in data:
+            ce = item.get('call_options', {}).get('market_data', {})
+            pe = item.get('put_options',  {}).get('market_data', {})
+            strike = item.get('strike_price', 0)
+            c_oi = ce.get('oi', 0) or 0; p_oi = pe.get('oi', 0) or 0
+            c_chg = c_oi - (ce.get('prev_oi', 0) or 0)
+            p_chg = p_oi - (pe.get('prev_oi', 0) or 0)
+            ce_oi += c_oi; pe_oi += p_oi
+            ce_vol += ce.get('volume', 0) or 0
+            pe_vol += pe.get('volume', 0) or 0
+            ce_chg += c_chg; pe_chg += p_chg
+            if c_oi > 0: top_ce.append({'strike': strike, 'oi': c_oi, 'chg': round(c_chg)})
+            if p_oi > 0: top_pe.append({'strike': strike, 'oi': p_oi, 'chg': round(p_chg)})
+
+        top_ce.sort(key=lambda x: x['oi'], reverse=True)
+        top_pe.sort(key=lambda x: x['oi'], reverse=True)
+        pcr = round(pe_oi / ce_oi, 3) if ce_oi > 0 else 0
+
+        if pcr > 1.3:   pcr_signal = 'Bullish — Heavy PUT writing (market support)'
+        elif pcr > 1.0: pcr_signal = 'Mildly Bullish'
+        elif pcr > 0.7: pcr_signal = 'Neutral'
+        elif pcr > 0.5: pcr_signal = 'Mildly Bearish'
+        else:           pcr_signal = 'Bearish — Heavy CALL writing (market resistance)'
+
+        return jsonify({
+            'sym': sym, 'spot': spot, 'expiry': expiry,
+            'pcr': pcr, 'pcr_signal': pcr_signal,
+            'ce_oi': ce_oi, 'pe_oi': pe_oi,
+            'ce_vol': ce_vol, 'pe_vol': pe_vol,
+            'ce_chg_oi': ce_chg, 'pe_chg_oi': pe_chg,
+            'resistance': top_ce[0]['strike'] if top_ce else None,
+            'support':    top_pe[0]['strike'] if top_pe else None,
+            'top_ce_strikes': top_ce[:5],
+            'top_pe_strikes': top_pe[:5],
+        })
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 
 # ── Keep-Alive ping endpoint ──────────────────────────────────────────────────
 @app.route('/ping')

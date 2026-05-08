@@ -57,12 +57,13 @@ async function setupAuth(callback) {
 
       // Restore last visited page/tab/stock from URL hash
       const hash = window.location.hash.replace('#', '');
-      const validPages = ['home','market','screener','watchlist','etf','ipo'];
+      const validPages = ['home','market','screener','watchlist','etf','ipo','intraday'];
       const homeTabs   = ['tradelog','broad','sectoral','thematic','strategy'];
-      const marketTabs = ['gainers','losers','volume','active','52high','52low'];
-      const etfTabs    = ['list','screener','rsi','scanner'];
-      const scrTabs    = ['myScreens','explore','chartink'];
-      const scrMyTabs  = ['swing','positional','longterm'];
+      const marketTabs   = ['gainers','losers','volume','active','52high','52low'];
+      const etfTabs      = ['list','screener','rsi','scanner'];
+      const scrTabs      = ['myScreens','explore','chartink'];
+      const scrMyTabs    = ['swing','positional','longterm'];
+      const intradayTabs = ['signals','optionchain','pcr','alerts'];
 
       if (hash.startsWith('stock-sym-')) {
         const sym = decodeURIComponent(hash.replace('stock-sym-', ''));
@@ -113,6 +114,13 @@ async function setupAuth(callback) {
         callback();
         setTimeout(() => showPage('ipo'), 50);
         return;
+      } else if (hash.startsWith('intraday-')) {
+        const tab = hash.replace('intraday-', '');
+        if (intradayTabs.includes(tab)) {
+          callback();
+          setTimeout(() => { showPageOnly('intraday'); switchIntradayTab(tab); }, 50);
+          return;
+        }
       } else if (hash && validPages.includes(hash) && hash !== 'home') {
         callback();
         setTimeout(() => showPage(hash), 50);
@@ -195,6 +203,7 @@ function showPage(page) {
   if (page === 'watchlist') loadWatchlist();
   if (page === 'etf')       loadEtf('list');
   if (page === 'ipo')       loadIpo();
+  if (page === 'intraday')  initIntradayPage();
 }
 
 // showPageOnly — sirf page switch karo, content load mat karo (restore ke liye)
@@ -291,7 +300,7 @@ async function fetchSuggestions(q) {
   try {
     const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
     const data = await res.json();
-    showDropdown(data);
+    showDropdown(Array.isArray(data) ? data : []);
   } catch { closeDropdown(); }
 }
 
@@ -299,16 +308,21 @@ function showDropdown(results) {
   const dd = document.getElementById('search-dropdown');
   if (!results || !results.length) { closeDropdown(); return; }
   dd.innerHTML = results.map(r => {
-    // Symbol: from r.symbol field (now enriched by backend), or extract from URL
     let sym = r.symbol || '';
     if (!sym && r.url) {
       const m = r.url.match(/\/company\/([^/]+)\//i);
       if (m) sym = m[1].toUpperCase();
     }
-    if (!sym) sym = r.name.split(' ')[0].toUpperCase();
-    return `<div class="dd-item" onclick="loadFromSearch('${escHTML(r.url)}','${escHTML(r.name)}')">
-      <span class="sym">${escHTML(sym)}</span>
-      <span class="name">${escHTML(r.name)}</span>
+    if (!sym) sym = (r.name || '').split(' ')[0].toUpperCase();
+    const displayName = r.name && r.name !== sym ? r.name : '';
+    const fnoBadge = r.is_fno ? `<span style="font-size:10px;background:rgba(0,230,168,0.15);color:var(--green);border:1px solid var(--green);border-radius:3px;padding:1px 5px;margin-left:4px">F&O</span>` : '';
+    // For local FNO results, load by symbol directly (no screener URL needed)
+    const onclick = r._local
+      ? `loadStockBySymbol('${escHTML(sym)}')`
+      : `loadFromSearch('${escHTML(r.url)}','${escHTML(r.name || sym)}')`;
+    return `<div class="dd-item" onclick="${onclick}">
+      <span class="sym">${escHTML(sym)}${fnoBadge}</span>
+      <span class="name">${escHTML(displayName)}</span>
     </div>`;
   }).join('');
   dd.classList.add('open');
@@ -320,8 +334,8 @@ function closeDropdown() {
 
 function onSearchKey(e) {
   if (e.key === 'Enter') {
-    const q = document.getElementById('search-input').value.trim();
-    if (q) { closeDropdown(); loadStockBySymbol(q.toUpperCase()); }
+    const q = document.getElementById('search-input').value.trim().toUpperCase();
+    if (q) { closeDropdown(); loadStockBySymbol(q); }
   }
   if (e.key === 'Escape') closeDropdown();
 }
@@ -329,6 +343,11 @@ function onSearchKey(e) {
 function loadFromSearch(url, name) {
   closeDropdown();
   document.getElementById('search-input').value = '';
+  // If it's a relative /company/SYM/ URL, load by symbol directly
+  if (url && url.startsWith('/company/')) {
+    const m = url.match(/\/company\/([^/]+)\//i);
+    if (m) { loadStockBySymbol(m[1].toUpperCase()); return; }
+  }
   loadStockByUrl(url, name);
 }
 
@@ -1122,10 +1141,28 @@ function refreshWatchlist() { loadWatchlist(); }
 function renderTradeLog() {
   const cont = document.getElementById('home-tab-content');
   if (!cont) return;
+
+  // Trade Log has 2 sub-tabs: Trades | Alerts
+  const activeSubTab = window._tlSubTab || 'trades';
+
+  cont.innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:14px;border-bottom:1px solid var(--border);padding-bottom:10px">
+      <button class="atab ${activeSubTab==='trades'?'active':''}" onclick="window._tlSubTab='trades';renderTradeLog()" style="font-size:13px;padding:6px 16px">📒 My Trades</button>
+      <button class="atab ${activeSubTab==='alerts'?'active':''}" onclick="window._tlSubTab='alerts';renderTradeLog()" style="font-size:13px;padding:6px 16px">🔔 Trade Alerts</button>
+    </div>
+    <div id="tl-subtab-content"></div>`;
+
+  if (activeSubTab === 'alerts') {
+    renderTradeAlerts();
+    return;
+  }
+
+  // ── Trades sub-tab ──────────────────────────────────────────────────────
+  const subCont = document.getElementById('tl-subtab-content');
   const trades = tradesFlat();
 
   if (!trades.length) {
-    cont.innerHTML = `<div class="trade-log-empty">
+    subCont.innerHTML = `<div class="trade-log-empty">
       <div class="tl-icon">📒</div>
       <div class="tl-title">Abhi koi trade log nahi</div>
       <div>Kisi bhi stock analyze karo → Notes tab → trade add karo</div>
@@ -1137,7 +1174,7 @@ function renderTradeLog() {
     .filter(t => t.type === 'BUY')
     .reduce((s, t) => s + (parseFloat(t.price)||0) * (parseFloat(t.qty)||0), 0);
 
-  cont.innerHTML = `
+  subCont.innerHTML = `
     <div style="overflow-x:auto">
       <table class="trade-log-table">
         <thead><tr>
@@ -1268,6 +1305,248 @@ function deleteTl(idx, sym) {
   if (symIdx >= 0) tradesDel(sym, symIdx);
   renderTradeLog();
   showToast('Trade deleted');
+}
+
+// ── Trade Alerts (server-side persistent) ─────────────────────────────────────
+let _tradeAlerts = [];
+
+async function renderTradeAlerts() {
+  const subCont = document.getElementById('tl-subtab-content');
+  if (!subCont) return;
+
+  // Load from server
+  try {
+    const r = await fetch('/api/trade_alerts');
+    _tradeAlerts = await r.json();
+  } catch { _tradeAlerts = []; }
+
+  const typeColors = { price: 'var(--accent)', target: 'var(--green)', stoploss: 'var(--red)' };
+  const typeLabels = { price: '💰 Price', target: '🎯 Target', stoploss: '🛑 Stop Loss' };
+
+  subCont.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px">
+      <div style="font-weight:700;font-size:15px;margin-bottom:12px;color:var(--text)">🔔 New Trade Alert</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <label style="font-size:11px;color:var(--subtext)">Symbol (FNO)</label>
+          <input id="ta-sym" type="text" placeholder="e.g. RELIANCE" maxlength="20"
+            style="background:var(--card2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;width:140px;text-transform:uppercase"
+            oninput="this.value=this.value.toUpperCase();taSearchFno(this.value)"
+            onkeydown="if(event.key==='Enter')addTradeAlert()">
+          <div id="ta-fno-dropdown" style="position:absolute;z-index:999;background:var(--card2);border:1px solid var(--border);border-radius:6px;max-height:160px;overflow-y:auto;display:none;min-width:140px"></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <label style="font-size:11px;color:var(--subtext)">Alert Type</label>
+          <select id="ta-type" style="background:var(--card2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px">
+            <option value="price">💰 Price Alert</option>
+            <option value="target">🎯 Target</option>
+            <option value="stoploss">🛑 Stop Loss</option>
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <label style="font-size:11px;color:var(--subtext)">Condition</label>
+          <select id="ta-cond" style="background:var(--card2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px">
+            <option value="above">Price crosses ABOVE ↑</option>
+            <option value="below">Price crosses BELOW ↓</option>
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <label style="font-size:11px;color:var(--subtext)">Target Price (₹)</label>
+          <input id="ta-price" type="number" placeholder="0.00" step="0.05"
+            style="background:var(--card2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;width:120px"
+            onkeydown="if(event.key==='Enter')addTradeAlert()">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <label style="font-size:11px;color:var(--subtext)">Note (optional)</label>
+          <input id="ta-note" type="text" placeholder="e.g. Breakout level"
+            style="background:var(--card2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;width:160px"
+            onkeydown="if(event.key==='Enter')addTradeAlert()">
+        </div>
+        <button class="btn-scan" onclick="addTradeAlert()" style="align-self:flex-end">+ Add Alert</button>
+      </div>
+    </div>
+
+    ${_tradeAlerts.length === 0 ? `
+      <div class="trade-log-empty">
+        <div class="tl-icon">🔔</div>
+        <div class="tl-title">Koi alert set nahi</div>
+        <div style="color:var(--subtext)">Upar form se FNO stocks ke liye alerts set karo</div>
+      </div>` : `
+      <div style="overflow-x:auto">
+        <table class="market-table" style="width:100%">
+          <thead><tr>
+            <th>Symbol</th><th>Type</th><th>Condition</th><th>Target Price</th>
+            <th>Note</th><th>Status</th><th>Created</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${_tradeAlerts.map(a => {
+              const tColor = typeColors[a.type] || 'var(--accent)';
+              const tLabel = typeLabels[a.type] || a.type;
+              const condLabel = a.cond === 'above' ? '↑ ABOVE' : '↓ BELOW';
+              const condColor = a.cond === 'above' ? 'var(--green)' : 'var(--red)';
+              const statusBadge = a.triggered
+                ? `<span style="color:var(--green);font-weight:700">✅ TRIGGERED @ ₹${fmtNum(a.triggered_at||0)}</span>`
+                : `<span style="color:var(--yellow)">⏳ Active</span>`;
+              const fnoBadge = a.is_fno ? `<span style="font-size:10px;background:rgba(0,230,168,0.15);color:var(--green);border:1px solid var(--green);border-radius:3px;padding:1px 4px;margin-left:4px">F&O</span>` : '';
+              const createdDate = a.created ? new Date(a.created).toLocaleDateString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—';
+              return `<tr style="${a.triggered?'opacity:0.7':''}">
+                <td><b style="color:var(--accent)">${escHTML(a.sym)}</b>${fnoBadge}</td>
+                <td style="color:${tColor};font-weight:600">${tLabel}</td>
+                <td style="color:${condColor};font-weight:600">${condLabel}</td>
+                <td style="font-weight:700;color:var(--yellow)">₹${fmtNum(a.price)}</td>
+                <td style="color:var(--subtext);font-size:12px">${escHTML(a.note||'—')}</td>
+                <td>${statusBadge}</td>
+                <td style="color:var(--subtext);font-size:11px">${createdDate}</td>
+                <td style="display:flex;gap:6px">
+                  ${a.triggered ? `<button class="btn-sm" onclick="resetTradeAlert('${a.id}')" style="font-size:11px;padding:3px 8px">↺ Reset</button>` : ''}
+                  <button class="del-btn" onclick="deleteTradeAlert('${a.id}')">✕</button>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div style="padding:8px 12px;font-size:12px;color:var(--subtext);background:var(--card2);border-top:1px solid var(--border);border-radius:0 0 8px 8px">
+        Total: <b style="color:var(--text)">${_tradeAlerts.length}</b> alerts |
+        Active: <b style="color:var(--yellow)">${_tradeAlerts.filter(a=>!a.triggered).length}</b> |
+        Triggered: <b style="color:var(--green)">${_tradeAlerts.filter(a=>a.triggered).length}</b>
+      </div>`}`;
+
+  // Start checking alerts in background
+  startTradeAlertChecker();
+}
+
+let _taFnoTimer = null;
+async function taSearchFno(q) {
+  clearTimeout(_taFnoTimer);
+  const dd = document.getElementById('ta-fno-dropdown');
+  if (!dd) return;
+  if (!q || q.length < 1) { dd.style.display = 'none'; return; }
+  _taFnoTimer = setTimeout(async () => {
+    try {
+      const r = await fetch(`/api/fno_stocks?q=${encodeURIComponent(q)}`);
+      const stocks = await r.json();
+      if (!stocks.length) { dd.style.display = 'none'; return; }
+      dd.innerHTML = stocks.slice(0,10).map(s =>
+        `<div style="padding:6px 10px;cursor:pointer;font-size:13px;color:var(--text)"
+          onmousedown="document.getElementById('ta-sym').value='${s}';document.getElementById('ta-fno-dropdown').style.display='none'"
+          onmouseover="this.style.background='var(--card)'" onmouseout="this.style.background=''">${s}</div>`
+      ).join('');
+      dd.style.display = 'block';
+      // Position below input
+      const inp = document.getElementById('ta-sym');
+      if (inp) {
+        const rect = inp.getBoundingClientRect();
+        dd.style.top = (rect.bottom + window.scrollY + 2) + 'px';
+        dd.style.left = rect.left + 'px';
+        dd.style.position = 'fixed';
+        dd.style.top = '';
+        dd.style.position = 'absolute';
+      }
+    } catch { dd.style.display = 'none'; }
+  }, 200);
+}
+
+async function addTradeAlert() {
+  const sym   = (document.getElementById('ta-sym')?.value || '').toUpperCase().trim();
+  const price = parseFloat(document.getElementById('ta-price')?.value || '');
+  const cond  = document.getElementById('ta-cond')?.value || 'above';
+  const type  = document.getElementById('ta-type')?.value || 'price';
+  const note  = document.getElementById('ta-note')?.value || '';
+
+  if (!sym) { showToast('Symbol daalo'); return; }
+  if (!price || isNaN(price)) { showToast('Price daalo'); return; }
+
+  try {
+    const r = await fetch('/api/trade_alerts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sym, price, cond, type, note })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showToast(`✅ Alert set: ${sym} ${cond} ₹${price}`);
+      document.getElementById('ta-sym').value = '';
+      document.getElementById('ta-price').value = '';
+      document.getElementById('ta-note').value = '';
+      renderTradeAlerts();
+    } else {
+      showToast('Error: ' + (d.error || 'Unknown'));
+    }
+  } catch(e) { showToast('Error: ' + e.message); }
+}
+
+async function deleteTradeAlert(id) {
+  try {
+    await fetch(`/api/trade_alerts/${id}`, { method: 'DELETE' });
+    showToast('Alert deleted');
+    renderTradeAlerts();
+  } catch(e) { showToast('Error: ' + e.message); }
+}
+
+async function resetTradeAlert(id) {
+  try {
+    await fetch(`/api/trade_alerts/${id}/reset`, { method: 'POST' });
+    showToast('Alert reset — active ho gaya');
+    renderTradeAlerts();
+  } catch(e) { showToast('Error: ' + e.message); }
+}
+
+let _taCheckerTimer = null;
+function startTradeAlertChecker() {
+  if (_taCheckerTimer) return; // already running
+  _taCheckerTimer = setInterval(checkTradeAlerts, 60000); // every 1 min
+}
+
+async function checkTradeAlerts() {
+  if (!_tradeAlerts || !_tradeAlerts.length) return;
+  const active = _tradeAlerts.filter(a => !a.triggered);
+  if (!active.length) return;
+
+  const syms = [...new Set(active.map(a => a.sym))];
+  for (const sym of syms) {
+    try {
+      const r = await fetch(`/api/live/${sym}`);
+      const d = await r.json();
+      const ltp = parseFloat(d.ltp) || 0;
+      if (!ltp) continue;
+
+      for (const a of active.filter(x => x.sym === sym)) {
+        const hit = (a.cond === 'above' && ltp >= a.price) || (a.cond === 'below' && ltp <= a.price);
+        if (hit) {
+          // Mark triggered on server
+          try {
+            await fetch(`/api/trade_alerts/${a.id}/trigger`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ltp })
+            });
+          } catch {}
+          // Local notification
+          const typeLabel = { price: 'Price Alert', target: 'Target Hit', stoploss: 'Stop Loss Hit' }[a.type] || 'Alert';
+          showToast(`🔔 ${typeLabel}: ${a.sym} @ ₹${ltp} (${a.cond === 'above' ? 'ABOVE' : 'BELOW'} ₹${a.price})`, 8000);
+          // Browser notification
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification(`StockPro — ${typeLabel}`, {
+              body: `${a.sym} @ ₹${ltp} | ${a.note || ''}`,
+              icon: '/static/favicon.ico'
+            });
+          }
+          // Sound
+          try {
+            const ctx = new AudioContext();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain); gain.connect(ctx.destination);
+            osc.frequency.value = 880; gain.gain.value = 0.3;
+            osc.start(); osc.stop(ctx.currentTime + 0.5);
+          } catch {}
+        }
+      }
+    } catch {}
+  }
+  // Refresh display if on alerts tab
+  if (window._tlSubTab === 'alerts') renderTradeAlerts();
 }
 
 async function fetchTlPnl(trade, idx) {

@@ -35,6 +35,9 @@
     <button class="nav-btn" onclick="showPage('ipo')" id="nav-ipo">
       🚀 <span>IPO</span>
     </button>
+    <button class="nav-btn" onclick="showPage('intraday')" id="nav-intraday">
+      ⚡ <span>Intraday</span>
+    </button>
   </nav>
 
   <div class="sidebar-footer">
@@ -223,6 +226,164 @@
       <div id="ipo-content"><div class="loading-box">⏳ IPO data load ho rahi hai...</div></div>
     </div>
 
+    <!-- ── INTRADAY PAGE ── -->
+    <div class="page" id="page-intraday">
+      <div class="page-header">
+        <h2>⚡ Intraday & Options</h2>
+        <div class="tab-pills" id="intraday-tabs">
+          <button class="pill active" onclick="switchIntradayTab('signals',this)">📊 Signals</button>
+          <button class="pill" onclick="switchIntradayTab('optionchain',this)">🔗 Option Chain</button>
+          <button class="pill" onclick="switchIntradayTab('pcr',this)">📈 PCR & OI</button>
+          <button class="pill" onclick="switchIntradayTab('alerts',this)">🔔 Alerts</button>
+          <button class="pill" onclick="switchIntradayTab('settings',this)" style="margin-left:auto;display:none">⚙️ Upstox</button>
+        </div>
+      </div>
+
+      <!-- UPSTOX SETTINGS TAB -->
+      <div id="intraday-tab-settings" style="display:none">
+        <div style="max-width:600px;margin:0 auto;padding:8px 0">
+
+          <!-- Token Setup -->
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:14px">
+            <div style="font-weight:700;font-size:15px;margin-bottom:4px">🔑 Upstox Access Token</div>
+            <div style="font-size:12px;color:var(--subtext);margin-bottom:12px;line-height:1.6">
+              1. <a href="https://upstox.com/developer/api-documentation/open-api" target="_blank" style="color:var(--accent)">Upstox Developer Portal</a> pe jaao<br>
+              2. Login karo → API → Access Token copy karo<br>
+              3. Token daily refresh hota hai — market open hone se pehle update karo
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <input id="upstox-token-input" type="password" placeholder="Paste Upstox access token here..."
+                style="flex:1;min-width:260px;background:var(--card2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:13px"
+                onkeydown="if(event.key==='Enter')saveUpstoxToken()">
+              <button class="btn-scan" onclick="saveUpstoxToken()">💾 Save Token</button>
+              <button class="btn-sm" onclick="checkUpstoxStatus()">🔍 Check Status</button>
+            </div>
+            <div id="upstox-token-status" style="margin-top:10px;font-size:13px"></div>
+          </div>
+
+          <!-- Instruments Cache -->
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px">
+            <div style="font-weight:700;font-size:15px;margin-bottom:4px">📋 NSE Instruments Cache</div>
+            <div style="font-size:12px;color:var(--subtext);margin-bottom:12px;line-height:1.6">
+              Upstox ke saare NSE stocks ke instrument keys download karo.<br>
+              Isse <b style="color:var(--text)">RELIANCE, TCS, HDFC</b> jaise kisi bhi stock ka intraday data milega.<br>
+              Cache daily auto-refresh hota hai. Pehli baar manually refresh karo.
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <button class="btn-scan" onclick="refreshInstruments()">🔄 Refresh Instruments</button>
+              <div id="instruments-status" style="font-size:13px;color:var(--subtext)">Loading...</div>
+            </div>
+            <div id="instruments-detail" style="margin-top:10px;font-size:12px;color:var(--subtext)"></div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- SIGNALS TAB -->
+      <div id="intraday-tab-signals">
+        <!-- Index selector + timeframe -->
+        <div class="id-controls">
+          <div class="id-index-btns">
+            <button class="id-idx-btn active" id="idxbtn-NIFTY"    onclick="setIdxSymbol('NIFTY',this)">NIFTY</button>
+            <button class="id-idx-btn"        id="idxbtn-BANKNIFTY" onclick="setIdxSymbol('BANKNIFTY',this)">BANKNIFTY</button>
+            <button class="id-idx-btn"        id="idxbtn-FINNIFTY"  onclick="setIdxSymbol('FINNIFTY',this)">FINNIFTY</button>
+            <div class="id-custom-wrap" style="position:relative">
+              <input id="id-custom-sym" type="text" placeholder="Stock... (RELI, TCS, HDFC)" maxlength="20"
+                     style="text-transform:uppercase"
+                     oninput="this.value=this.value.toUpperCase();idSearchFno(this.value)"
+                     onkeydown="if(event.key==='Enter'){var v=this.value.trim();if(v){setIdxSymbol(v,null);document.getElementById('id-sym-dd').style.display='none';runIntradayAnalysis()}}">
+              <button onclick="var v=document.getElementById('id-custom-sym').value.trim();if(v){setIdxSymbol(v,null);document.getElementById('id-sym-dd').style.display='none';runIntradayAnalysis()}">Go</button>
+              <div id="id-sym-dd" style="display:none;position:absolute;top:100%;left:0;z-index:999;background:var(--card2);border:1px solid var(--border);border-radius:6px;max-height:200px;overflow-y:auto;min-width:180px;box-shadow:0 4px 16px rgba(0,0,0,0.4)"></div>
+            </div>
+          </div>
+          <div class="id-tf-btns">
+            <button class="id-tf-btn active" onclick="setTimeframe('3m',this)">3m</button>
+            <button class="id-tf-btn" onclick="setTimeframe('5m',this)">5m</button>
+            <button class="id-tf-btn" onclick="setTimeframe('15m',this)">15m</button>
+            <button class="id-tf-btn" onclick="setTimeframe('1h',this)">1h</button>
+          </div>
+          <button class="btn-scan" onclick="runIntradayAnalysis()" id="btn-id-scan">🔍 Analyze</button>
+          <button class="btn-sm" onclick="toggleAutoRefresh()" id="btn-auto-refresh" style="background:rgba(0,230,168,0.1);border-color:var(--green);color:var(--green)">▶ Auto</button>
+        </div>
+
+        <!-- Signal cards -->
+        <div id="id-signal-area">
+          <div class="id-welcome">
+            <div style="font-size:48px">⚡</div>
+            <div style="font-size:18px;font-weight:700;margin:8px 0">Intraday Analysis</div>
+            <div style="color:var(--subtext)">Index ya symbol select karo → Analyze click karo</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- OPTION CHAIN TAB -->
+      <div id="intraday-tab-optionchain" style="display:none">
+        <div class="id-controls">
+          <div class="id-index-btns">
+            <button class="id-idx-btn active" id="ocbtn-NIFTY" onclick="setOcSymbol('NIFTY',this)">NIFTY</button>
+            <button class="id-idx-btn" id="ocbtn-BANKNIFTY" onclick="setOcSymbol('BANKNIFTY',this)">BANKNIFTY</button>
+            <button class="id-idx-btn" id="ocbtn-FINNIFTY" onclick="setOcSymbol('FINNIFTY',this)">FINNIFTY</button>
+            <div class="id-custom-wrap" style="position:relative">
+              <input id="oc-custom-sym" type="text" placeholder="FNO stock..." maxlength="20"
+                style="text-transform:uppercase"
+                oninput="this.value=this.value.toUpperCase();ocSearchFno(this.value)"
+                onkeydown="if(event.key==='Enter'){setOcSymbol(this.value,null);document.getElementById('oc-fno-dd').style.display='none'}">
+              <button onclick="setOcSymbol(document.getElementById('oc-custom-sym').value.toUpperCase(),null);document.getElementById('oc-fno-dd').style.display='none'">Go</button>
+              <div id="oc-fno-dd" style="display:none;position:absolute;top:100%;left:0;z-index:999;background:var(--card2);border:1px solid var(--border);border-radius:6px;max-height:180px;overflow-y:auto;min-width:160px;box-shadow:0 4px 16px rgba(0,0,0,0.4)"></div>
+            </div>
+          </div>
+          <button class="btn-scan" onclick="loadOptionChain()">🔄 Refresh</button>
+          <button class="btn-sm" onclick="showCookieSetup()" style="background:rgba(255,149,0,0.1);border-color:var(--orange);color:var(--orange);display:none">🍪 Setup Cookies</button>
+        </div>
+        <!-- Cookie setup panel -->
+        <div id="oc-cookie-panel" style="display:none !important;margin-bottom:12px;padding:14px;background:var(--card);border:1px solid var(--orange);border-radius:10px">
+          <div style="font-weight:700;color:var(--orange);margin-bottom:8px">🍪 NSE Cookie Setup (One-time)</div>
+          <div style="font-size:12px;color:var(--subtext);margin-bottom:10px;line-height:1.6">
+            1. Browser mein <b style="color:var(--text)">nseindia.com/option-chain</b> kholo<br>
+            2. F12 → Console mein paste karo: <code style="background:var(--card2);padding:2px 6px;border-radius:3px;color:var(--accent)">copy(document.cookie)</code><br>
+            3. Jo copy hua woh neeche paste karo:
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <textarea id="oc-cookie-input" placeholder="Paste cookies here (from NSE browser console)..."
+              style="flex:1;min-width:300px;height:80px;background:var(--card2);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:6px;font-size:12px;font-family:monospace;resize:vertical"></textarea>
+            <button class="btn-scan" onclick="saveCookies()" style="align-self:flex-end">💾 Save</button>
+          </div>
+          <div id="cookie-status" style="margin-top:8px;font-size:12px"></div>
+        </div>
+        <div id="oc-content"><div class="loading-box">⏳ Option chain load karo...</div></div>
+      </div>
+
+      <!-- PCR & OI TAB -->
+      <div id="intraday-tab-pcr" style="display:none">
+        <div class="id-controls">
+          <div class="id-index-btns">
+            <button class="id-idx-btn active" id="pcrbtn-NIFTY" onclick="setPcrSymbol('NIFTY',this)">NIFTY</button>
+            <button class="id-idx-btn" id="pcrbtn-BANKNIFTY" onclick="setPcrSymbol('BANKNIFTY',this)">BANKNIFTY</button>
+            <button class="id-idx-btn" id="pcrbtn-FINNIFTY" onclick="setPcrSymbol('FINNIFTY',this)">FINNIFTY</button>
+          </div>
+          <button class="btn-scan" onclick="loadPcrOi()">🔄 Refresh</button>
+        </div>
+        <div id="pcr-content"><div class="loading-box">⏳ PCR & OI data load karo...</div></div>
+      </div>
+
+      <!-- ALERTS TAB -->
+      <div id="intraday-tab-alerts" style="display:none">
+        <div class="id-alert-setup">
+          <h3 style="margin-bottom:12px">🔔 Price Alerts Setup</h3>
+          <div class="id-alert-form">
+            <input id="alert-sym"   type="text"   placeholder="Symbol (e.g. NIFTY)" style="text-transform:uppercase">
+            <input id="alert-price" type="number" placeholder="Target Price" step="0.05">
+            <select id="alert-cond">
+              <option value="above">Price crosses ABOVE</option>
+              <option value="below">Price crosses BELOW</option>
+            </select>
+            <button class="btn-scan" onclick="addAlert()">+ Add Alert</button>
+          </div>
+          <div id="alert-list" style="margin-top:16px"></div>
+        </div>
+      </div>
+    </div>
+
   </div><!-- end page-content -->
 </div><!-- end main-wrap -->
 
@@ -311,5 +472,6 @@
 </div>
 
 <script src="/static/js/app.js"></script>
+<script src="/static/js/intraday.js"></script>
 </body>
 </html>
