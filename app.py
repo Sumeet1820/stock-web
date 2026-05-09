@@ -290,20 +290,65 @@ def _compute_technical(sym, fdata=None, mode='swing'):
         return {'error':str(ex)}
 
 def _fetch_all_indices():
-    rows=[]
+    rows = []
+    # ── Try NSE API first ─────────────────────────────────────────────────────
     try:
-        NSE_SESSION.get("https://www.nseindia.com",timeout=8)
-        r=NSE_SESSION.get("https://www.nseindia.com/api/allIndices",timeout=12)
-        if r.status_code!=200: return rows
-        for item in r.json().get('data',[]):
-            sym=(item.get('indexSymbol') or item.get('index','')).strip()
-            if not sym or sym in SKIP_INDICES: continue
-            try: chg=float(item.get('percentChange',item.get('pChange',0)))
-            except: chg=0.0
-            try: last=float(item.get('last',item.get('lastPrice',0)))
-            except: last=0.0
-            rows.append({'name':sym,'last':last,'chg':chg,'cat':_cat(sym)})
-    except Exception as ex: print(f"[allIndices] {ex}")
+        NSE_SESSION.get("https://www.nseindia.com", timeout=8)
+        r = NSE_SESSION.get("https://www.nseindia.com/api/allIndices", timeout=12)
+        if r.status_code == 200:
+            for item in r.json().get('data', []):
+                sym = (item.get('indexSymbol') or item.get('index', '')).strip()
+                if not sym or sym in SKIP_INDICES: continue
+                try: chg = float(item.get('percentChange', item.get('pChange', 0)))
+                except: chg = 0.0
+                try: last = float(item.get('last', item.get('lastPrice', 0)))
+                except: last = 0.0
+                rows.append({'name': sym, 'last': last, 'chg': chg, 'cat': _cat(sym)})
+            if rows:
+                return rows
+    except Exception as ex:
+        print(f"[allIndices NSE] {ex}")
+
+    # ── Fallback: yfinance (works on Render/cloud) ────────────────────────────
+    try:
+        import yfinance as yf
+        yf_map = {
+            'NIFTY 50':       '^NSEI',
+            'NIFTY BANK':     '^NSEBANK',
+            'NIFTY IT':       'NIFTY_IT.NS',
+            'NIFTY MIDCAP 100': 'NIFTY_MIDCAP_100.NS',
+            'NIFTY NEXT 50':  '^NSMIDCP',
+            'INDIA VIX':      '^INDIAVIX',
+            'NIFTY FMCG':     'NIFTY_FMCG.NS',
+            'NIFTY AUTO':     'NIFTY_AUTO.NS',
+            'NIFTY PHARMA':   'NIFTY_PHARMA.NS',
+            'NIFTY METAL':    'NIFTY_METAL.NS',
+            'NIFTY REALTY':   'NIFTY_REALTY.NS',
+            'NIFTY ENERGY':   'NIFTY_ENERGY.NS',
+        }
+        tickers = list(yf_map.values())
+        data = yf.download(tickers, period='2d', interval='1d',
+                           auto_adjust=True, progress=False, group_by='ticker')
+        for name, yf_sym in yf_map.items():
+            try:
+                if len(tickers) > 1:
+                    hist = data[yf_sym] if yf_sym in data.columns.get_level_values(0) else None
+                else:
+                    hist = data
+                if hist is None or hist.empty: continue
+                hist = hist.dropna(subset=['Close'])
+                if len(hist) < 1: continue
+                last = float(hist['Close'].iloc[-1])
+                chg = 0.0
+                if len(hist) >= 2:
+                    prev = float(hist['Close'].iloc[-2])
+                    if prev > 0: chg = round((last - prev) / prev * 100, 2)
+                rows.append({'name': name, 'last': round(last, 2), 'chg': chg, 'cat': _cat(name)})
+            except Exception as ex2:
+                print(f"[indices yf] {yf_sym}: {ex2}")
+    except Exception as ex:
+        print(f"[allIndices yfinance] {ex}")
+
     return rows
 
 def _calc_ipo_score(ipo):
@@ -941,7 +986,7 @@ def api_returns(sym):
 @app.route('/api/live/<sym>')
 def api_live(sym):
     sym = sym.upper()
-    # Try Upstox first for live LTP (faster + more accurate)
+    # 1. Try Upstox first (works on Render too)
     if _upstox_token:
         try:
             import requests as _rq
@@ -960,9 +1005,32 @@ def api_live(sym):
                             return jsonify({'ltp': ltp, 'symbol': sym, 'source': 'upstox'})
         except Exception as ex:
             print(f'[Upstox live] {sym}: {ex}')
-    # Fallback to NSE
-    try: return jsonify(fetch_nse_live(sym))
-    except Exception as e: return jsonify({'error':str(e)}),500
+    # 2. Try NSE (works locally, may fail on Render)
+    try:
+        data = fetch_nse_live(sym)
+        if data and data.get('ltp'):
+            return jsonify(data)
+    except: pass
+    # 3. Fallback: yfinance (always works, slight delay)
+    try:
+        import yfinance as yf
+        idx_map = {'NIFTY':'^NSEI','BANKNIFTY':'^NSEBANK','FINNIFTY':'NIFTY_FIN_SERVICE.NS','SENSEX':'^BSESN'}
+        yf_sym = idx_map.get(sym, f'{sym}.NS')
+        t = yf.Ticker(yf_sym)
+        hist = t.history(period='2d', interval='1d', auto_adjust=True)
+        if hist is not None and not hist.empty:
+            ltp = float(hist['Close'].iloc[-1])
+            chg = 0.0; chg_pct = 0.0
+            if len(hist) >= 2:
+                prev = float(hist['Close'].iloc[-2])
+                if prev > 0:
+                    chg = round(ltp - prev, 2)
+                    chg_pct = round((ltp - prev) / prev * 100, 2)
+            return jsonify({'ltp': round(ltp,2), 'change': chg, 'change_pct': chg_pct,
+                            'symbol': sym, 'source': 'yfinance'})
+    except Exception as ex:
+        print(f'[yfinance live] {sym}: {ex}')
+    return jsonify({'error': f'{sym} ka live price nahi mila'}), 404
 
 @app.route('/api/price/<sym>')
 def api_price(sym):
