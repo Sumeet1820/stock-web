@@ -1136,24 +1136,95 @@ def api_indices():
 
 @app.route('/api/index-stocks')
 def api_index_stocks():
-    idx=request.args.get('index','').strip()
+    idx = request.args.get('index', '').strip()
     if not idx: return jsonify([])
+
+    # ── 1. Try NSE API ────────────────────────────────────────────────────────
     try:
-        NSE_SESSION.get("https://www.nseindia.com",timeout=8)
-        enc=_req.utils.quote(idx)
-        r=NSE_SESSION.get(f"https://www.nseindia.com/api/equity-stockIndices?index={enc}",timeout=15)
-        if r.status_code!=200: return jsonify([])
-        rows=[]
-        for item in r.json().get('data',[]):
-            sym=(item.get('symbol') or '').strip()
-            if not sym or sym==idx: continue
-            try: chg=float(item.get('pChange',item.get('perChange',0)))
-            except: chg=0.0
-            try: ltp=float(str(item.get('lastPrice',item.get('ltp',0))).replace(',',''))
-            except: ltp=0.0
-            rows.append({'symbol':sym,'ltp':ltp,'chg':chg})
+        NSE_SESSION.get("https://www.nseindia.com", timeout=8)
+        enc = _req.utils.quote(idx)
+        r = NSE_SESSION.get(f"https://www.nseindia.com/api/equity-stockIndices?index={enc}", timeout=15)
+        if r.status_code == 200:
+            rows = []
+            for item in r.json().get('data', []):
+                sym = (item.get('symbol') or '').strip()
+                if not sym or sym == idx: continue
+                try: chg = float(item.get('pChange', item.get('perChange', 0)))
+                except: chg = 0.0
+                try: ltp = float(str(item.get('lastPrice', item.get('ltp', 0))).replace(',', ''))
+                except: ltp = 0.0
+                rows.append({'symbol': sym, 'ltp': ltp, 'chg': chg})
+            if rows:
+                return jsonify(rows)
+    except Exception as ex:
+        print(f'[index-stocks NSE] {idx}: {ex}')
+
+    # ── 2. Fallback: yfinance — fetch index constituents via known lists ──────
+    try:
+        import yfinance as yf
+
+        # Known index → constituent symbols map (top stocks)
+        INDEX_STOCKS = {
+            'NIFTY 50': ['RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK','HINDUNILVR','SBIN','BHARTIARTL',
+                         'ITC','KOTAKBANK','LT','AXISBANK','WIPRO','HCLTECH','ASIANPAINT','MARUTI',
+                         'NTPC','SUNPHARMA','TATAMOTORS','POWERGRID','ULTRACEMCO','TITAN','BAJFINANCE',
+                         'BAJAJFINSV','NESTLEIND','TECHM','ONGC','JSWSTEEL','TATASTEEL','BPCL',
+                         'COALINDIA','GRASIM','INDUSINDBK','DIVISLAB','CIPLA','DRREDDY','APOLLOHOSP',
+                         'TATACONSUM','BRITANNIA','HINDALCO','EICHERMOT','HEROMOTOCO','BAJAJ-AUTO',
+                         'ADANIENT','ADANIPORTS','SBILIFE','HDFCLIFE','ICICIGI','VEDL','UPL'],
+            'NIFTY NEXT 50': ['ADANIGREEN','ADANITRANS','AMBUJACEM','AUROPHARMA','BANDHANBNK','BANKBARODA',
+                              'BEL','BERGEPAINT','BIOCON','BOSCHLTD','CHOLAFIN','COLPAL','CONCOR',
+                              'DLF','GAIL','GODREJCP','GODREJPROP','HAL','HAVELLS','ICICIPRULI',
+                              'INDHOTEL','INDUSTOWER','IOC','IRCTC','LUPIN','MARICO','MUTHOOTFIN',
+                              'NAUKRI','NMDC','OFSS','PAGEIND','PEL','PIDILITIND','PNB','RECLTD',
+                              'SAIL','SHREECEM','SIEMENS','SRF','TRENT','TVSMOTOR','UBL','VOLTAS',
+                              'ZYDUSLIFE','ZEEL','TORNTPHARM','MPHASIS','PERSISTENT','COFORGE','LTTS'],
+            'NIFTY BANK': ['HDFCBANK','ICICIBANK','KOTAKBANK','AXISBANK','SBIN','BANDHANBNK',
+                           'FEDERALBNK','INDUSINDBK','IDFCFIRSTB','AUBANK','PNB','BANKBARODA'],
+            'NIFTY IT': ['TCS','INFY','HCLTECH','WIPRO','TECHM','MPHASIS','LTTS','COFORGE',
+                         'PERSISTENT','OFSS'],
+            'NIFTY MIDCAP 100': ['ABCAPITAL','ASTRAL','ATUL','AUBANK','AUROPHARMA','BALKRISIND',
+                                 'BANDHANBNK','BANKBARODA','BEL','BERGEPAINT','BIOCON','CHOLAFIN',
+                                 'COLPAL','CONCOR','CUMMINSIND','DABUR','DALBHARAT','DEEPAKNTR',
+                                 'DIXON','DLF','GODREJCP','GRANULES','GUJGASLTD','HAVELLS','HINDCOPPER',
+                                 'IPCALAB','IRCTC','JKCEMENT','JUBLFOOD','LAURUSLABS','LICHSGFIN',
+                                 'LUPIN','M&MFIN','MANAPPURAM','MARICO','MCX','MUTHOOTFIN','NAUKRI',
+                                 'NAVINFLUOR','NMDC','PAGEIND','PERSISTENT','POLYCAB','RAMCOCEM',
+                                 'RBLBANK','RECLTD','SRF','TATACOMM','TORNTPHARM','TRENT'],
+        }
+
+        syms = INDEX_STOCKS.get(idx)
+        if not syms:
+            # For unknown index, return empty with message
+            return jsonify({'error': f'{idx} ke stocks nahi mile — NSE API unavailable'})
+
+        tickers = [f'{s}.NS' for s in syms]
+        data = yf.download(tickers, period='2d', interval='1d',
+                           auto_adjust=True, progress=False, group_by='ticker')
+
+        rows = []
+        for sym in syms:
+            try:
+                yf_sym = f'{sym}.NS'
+                if len(tickers) > 1:
+                    lvl0 = data.columns.get_level_values(0)
+                    if yf_sym not in lvl0: continue
+                    hist = data[yf_sym].dropna(subset=['Close'])
+                else:
+                    hist = data.dropna(subset=['Close'])
+                if hist.empty: continue
+                ltp = round(float(hist['Close'].iloc[-1]), 2)
+                chg = 0.0
+                if len(hist) >= 2:
+                    prev = float(hist['Close'].iloc[-2])
+                    if prev > 0: chg = round((ltp - prev) / prev * 100, 2)
+                rows.append({'symbol': sym, 'ltp': ltp, 'chg': chg})
+            except: continue
+
         return jsonify(rows)
-    except Exception as e: return jsonify({'error':str(e)}),500
+    except Exception as ex:
+        print(f'[index-stocks yfinance] {idx}: {ex}')
+        return jsonify({'error': f'{idx} ke stocks nahi mile'}), 500
 
 @app.route('/api/chartink-list')
 def api_chartink_list():
