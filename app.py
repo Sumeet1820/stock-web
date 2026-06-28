@@ -1135,9 +1135,9 @@ def api_indices():
     except Exception as e: return jsonify({'error':str(e)}),500
 
 def _get_prices_upstox(syms):
-    """Batch fetch live prices from Upstox for a list of symbols. Returns [] if unavailable."""
+    """Batch fetch live prices from Upstox. Always returns all symbols (ltp=0 if unavailable)."""
     if not _upstox_token or not _upstox_instruments:
-        return []
+        return [{'symbol': s, 'ltp': 0, 'chg': 0.0} for s in syms]
     try:
         import requests as _rq2
         ikeys = []
@@ -1145,31 +1145,32 @@ def _get_prices_upstox(syms):
             for s in syms:
                 k = _upstox_instruments.get(s)
                 if k: ikeys.append((s, k))
-        if not ikeys:
-            return []
-        # Process in batches of 100 (Upstox limit)
-        all_rows = []
+
         lmap = {}; cmap = {}
+        # Process in batches of 100
         for i in range(0, len(ikeys), 100):
             batch = ikeys[i:i+100]
             kp = ','.join(k for _, k in batch)
             ke = kp.replace('|', '%7C').replace(' ', '%20')
-            r = _rq2.get(
-                f'https://api.upstox.com/v2/market-quote/quotes?instrument_key={ke}',
-                headers=_upstox_headers(), timeout=12)
-            if r.status_code == 200:
-                for k, v in r.json().get('data', {}).items():
-                    sp = k.split(':')[-1].split('|')[-1].upper()
-                    ltp  = float(v.get('last_price', 0) or 0)
-                    prev = float((v.get('ohlc') or {}).get('close', 0) or 0)
-                    lmap[sp] = ltp
-                    cmap[sp] = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
-        rows = [{'symbol': s, 'ltp': round(lmap.get(s, 0), 2), 'chg': cmap.get(s, 0.0)}
+            try:
+                r = _rq2.get(
+                    f'https://api.upstox.com/v2/market-quote/quotes?instrument_key={ke}',
+                    headers=_upstox_headers(), timeout=12)
+                if r.status_code == 200:
+                    for k, v in r.json().get('data', {}).items():
+                        sp = k.split(':')[-1].split('|')[-1].upper()
+                        ltp  = float(v.get('last_price', 0) or 0)
+                        prev = float((v.get('ohlc') or {}).get('close', 0) or 0)
+                        lmap[sp] = ltp
+                        cmap[sp] = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
+            except: pass
+
+        # Always return ALL symbols — ltp=0 if price not available
+        return [{'symbol': s, 'ltp': round(lmap.get(s, 0), 2), 'chg': cmap.get(s, 0.0)}
                 for s in syms]
-        return rows if any(r['ltp'] > 0 for r in rows) else []
     except Exception as ex:
         print(f'[_get_prices_upstox] {ex}')
-        return []
+        return [{'symbol': s, 'ltp': 0, 'chg': 0.0} for s in syms]
 
 @app.route('/api/index-stocks')
 def api_index_stocks():
@@ -1248,13 +1249,10 @@ def api_index_stocks():
                 syms_from_csv = [row.get('Symbol','').strip() for row in reader
                                  if row.get('Symbol','').strip()]
                 if syms_from_csv:
-                    # Now get live prices from Upstox for these symbols
+                    # Get live prices (returns all symbols even if price=0)
                     rows = _get_prices_upstox(syms_from_csv)
-                    if rows:
-                        return jsonify(rows)
-                    # Return symbols without prices if Upstox unavailable
-                    return jsonify([{'symbol': s, 'ltp': 0, 'chg': 0.0}
-                                    for s in syms_from_csv])
+                    return jsonify(rows if rows else
+                                   [{'symbol': s, 'ltp': 0, 'chg': 0.0} for s in syms_from_csv])
         except Exception as ex:
             print(f'[index-stocks CSV] {idx}: {ex}')
 
