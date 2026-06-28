@@ -1139,7 +1139,7 @@ def api_index_stocks():
     idx = request.args.get('index', '').strip()
     if not idx: return jsonify([])
 
-    # ── 1. Try NSE API ────────────────────────────────────────────────────────
+    # ── 1. Try NSE API (fast, works locally) ─────────────────────────────────
     try:
         NSE_SESSION.get("https://www.nseindia.com", timeout=8)
         enc = _req.utils.quote(idx)
@@ -1159,83 +1159,69 @@ def api_index_stocks():
     except Exception as ex:
         print(f'[index-stocks NSE] {idx}: {ex}')
 
-    # ── 2. Fallback: yfinance — fetch index constituents via known lists ──────
-    try:
-        import yfinance as yf
+    # ── 2. Fallback: Upstox market quotes (fast batch) ────────────────────────
+    INDEX_STOCKS = {
+        'NIFTY 50': ['RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK','HINDUNILVR','SBIN','BHARTIARTL',
+                     'ITC','KOTAKBANK','LT','AXISBANK','WIPRO','HCLTECH','ASIANPAINT','MARUTI',
+                     'NTPC','SUNPHARMA','TATAMOTORS','POWERGRID','ULTRACEMCO','TITAN','BAJFINANCE',
+                     'BAJAJFINSV','NESTLEIND','TECHM','ONGC','JSWSTEEL','TATASTEEL','BPCL'],
+        'NIFTY NEXT 50': ['ADANIGREEN','AMBUJACEM','AUROPHARMA','BANDHANBNK','BANKBARODA',
+                          'BEL','BERGEPAINT','BIOCON','BOSCHLTD','CHOLAFIN','COLPAL','CONCOR',
+                          'DLF','GAIL','GODREJCP','GODREJPROP','HAL','HAVELLS','ICICIPRULI',
+                          'INDHOTEL','INDUSTOWER','IOC','IRCTC','LUPIN','MARICO','MUTHOOTFIN',
+                          'NAUKRI','NMDC','OFSS','PAGEIND'],
+        'NIFTY BANK': ['HDFCBANK','ICICIBANK','KOTAKBANK','AXISBANK','SBIN','BANDHANBNK',
+                       'FEDERALBNK','INDUSINDBK','IDFCFIRSTB','AUBANK','PNB','BANKBARODA'],
+        'NIFTY IT': ['TCS','INFY','HCLTECH','WIPRO','TECHM','MPHASIS','LTTS','COFORGE',
+                     'PERSISTENT','OFSS'],
+        'NIFTY MIDCAP 100': ['ABCAPITAL','ASTRAL','AUBANK','AUROPHARMA','BALKRISIND',
+                             'BANDHANBNK','BEL','BERGEPAINT','CHOLAFIN','COLPAL',
+                             'DIXON','DLF','GODREJCP','HAVELLS','IRCTC',
+                             'JUBLFOOD','LUPIN','MARICO','MCX','MUTHOOTFIN',
+                             'NAUKRI','NMDC','PAGEIND','PERSISTENT','POLYCAB',
+                             'RAMCOCEM','RBLBANK','SRF','TATACOMM','TRENT'],
+    }
 
-        # Known index → constituent symbols map (top stocks)
-        INDEX_STOCKS = {
-            'NIFTY 50': ['RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK','HINDUNILVR','SBIN','BHARTIARTL',
-                         'ITC','KOTAKBANK','LT','AXISBANK','WIPRO','HCLTECH','ASIANPAINT','MARUTI',
-                         'NTPC','SUNPHARMA','TATAMOTORS','POWERGRID','ULTRACEMCO','TITAN','BAJFINANCE',
-                         'BAJAJFINSV','NESTLEIND','TECHM','ONGC','JSWSTEEL','TATASTEEL','BPCL',
-                         'COALINDIA','GRASIM','INDUSINDBK','DIVISLAB','CIPLA','DRREDDY','APOLLOHOSP',
-                         'TATACONSUM','BRITANNIA','HINDALCO','EICHERMOT','HEROMOTOCO','BAJAJ-AUTO',
-                         'ADANIENT','ADANIPORTS','SBILIFE','HDFCLIFE','ICICIGI','VEDL','UPL'],
-            'NIFTY NEXT 50': ['ADANIGREEN','ADANITRANS','AMBUJACEM','AUROPHARMA','BANDHANBNK','BANKBARODA',
-                              'BEL','BERGEPAINT','BIOCON','BOSCHLTD','CHOLAFIN','COLPAL','CONCOR',
-                              'DLF','GAIL','GODREJCP','GODREJPROP','HAL','HAVELLS','ICICIPRULI',
-                              'INDHOTEL','INDUSTOWER','IOC','IRCTC','LUPIN','MARICO','MUTHOOTFIN',
-                              'NAUKRI','NMDC','OFSS','PAGEIND','PEL','PIDILITIND','PNB','RECLTD',
-                              'SAIL','SHREECEM','SIEMENS','SRF','TRENT','TVSMOTOR','UBL','VOLTAS',
-                              'ZYDUSLIFE','ZEEL','TORNTPHARM','MPHASIS','PERSISTENT','COFORGE','LTTS'],
-            'NIFTY BANK': ['HDFCBANK','ICICIBANK','KOTAKBANK','AXISBANK','SBIN','BANDHANBNK',
-                           'FEDERALBNK','INDUSINDBK','IDFCFIRSTB','AUBANK','PNB','BANKBARODA'],
-            'NIFTY IT': ['TCS','INFY','HCLTECH','WIPRO','TECHM','MPHASIS','LTTS','COFORGE',
-                         'PERSISTENT','OFSS'],
-            'NIFTY MIDCAP 100': ['ABCAPITAL','ASTRAL','ATUL','AUBANK','AUROPHARMA','BALKRISIND',
-                                 'BANDHANBNK','BANKBARODA','BEL','BERGEPAINT','BIOCON','CHOLAFIN',
-                                 'COLPAL','CONCOR','CUMMINSIND','DABUR','DALBHARAT','DEEPAKNTR',
-                                 'DIXON','DLF','GODREJCP','GRANULES','GUJGASLTD','HAVELLS','HINDCOPPER',
-                                 'IPCALAB','IRCTC','JKCEMENT','JUBLFOOD','LAURUSLABS','LICHSGFIN',
-                                 'LUPIN','M&MFIN','MANAPPURAM','MARICO','MCX','MUTHOOTFIN','NAUKRI',
-                                 'NAVINFLUOR','NMDC','PAGEIND','PERSISTENT','POLYCAB','RAMCOCEM',
-                                 'RBLBANK','RECLTD','SRF','TATACOMM','TORNTPHARM','TRENT'],
-        }
+    syms = INDEX_STOCKS.get(idx)
+    if not syms:
+        return jsonify({'error': f'{idx} ke stocks nahi mile'})
 
-        syms = INDEX_STOCKS.get(idx)
-        if not syms:
-            # For unknown index, return empty with message
-            return jsonify({'error': f'{idx} ke stocks nahi mile — NSE API unavailable'})
+    rows = []
 
-        tickers = [f'{s}.NS' for s in syms]
-        # Download one by one to avoid multi-ticker column grouping issues
-        rows = []
-        # Batch download with Tickers for reliability
-        import yfinance as yf
-        ticker_str = ' '.join(tickers)
-        data = yf.download(ticker_str, period='2d', interval='1d',
-                           auto_adjust=True, progress=False, group_by='ticker',
-                           threads=True)
+    # Try Upstox batch (fast — all in one call)
+    if _upstox_token:
+        try:
+            import requests as _rq
+            ikeys = []
+            with _instruments_lock:
+                for s in syms:
+                    k = _upstox_instruments.get(s)
+                    if k: ikeys.append((s, k))
 
-        for sym in syms:
-            try:
-                yf_sym = f'{sym}.NS'
-                # Handle both single and multi ticker responses
-                if hasattr(data.columns, 'levels') and yf_sym in data.columns.get_level_values(0):
-                    hist = data[yf_sym].dropna(subset=['Close'])
-                elif 'Close' in data.columns and len(tickers) == 1:
-                    hist = data.dropna(subset=['Close'])
-                else:
-                    # Try individual fetch as last resort
-                    h2 = yf.download(yf_sym, period='2d', interval='1d', auto_adjust=True, progress=False)
-                    if h2 is None or h2.empty: continue
-                    if hasattr(h2.columns, 'levels'): h2.columns = h2.columns.get_level_values(0)
-                    hist = h2.dropna(subset=['Close'])
+            if ikeys:
+                keys_param = ','.join(k for _, k in ikeys[:50])
+                keys_enc   = keys_param.replace('|', '%7C').replace(' ', '%20')
+                r2 = _rq.get(
+                    f'https://api.upstox.com/v2/market-quote/ltp?instrument_key={keys_enc}',
+                    headers=_upstox_headers(), timeout=10)
+                if r2.status_code == 200:
+                    qdata = r2.json().get('data', {})
+                    # Build symbol → ltp map from response keys like 'NSE_EQ:RELIANCE'
+                    ltp_map = {}
+                    for k, v in qdata.items():
+                        sym_part = k.split(':')[-1].split('|')[-1]
+                        ltp_map[sym_part.upper()] = v.get('last_price', 0)
+                    for s in syms:
+                        ltp = ltp_map.get(s, 0)
+                        rows.append({'symbol': s, 'ltp': round(float(ltp), 2) if ltp else 0, 'chg': 0.0})
+                    if rows:
+                        return jsonify(rows)
+        except Exception as ex:
+            print(f'[index-stocks Upstox] {idx}: {ex}')
 
-                if hist is None or hist.empty: continue
-                ltp = round(float(hist['Close'].iloc[-1]), 2)
-                chg = 0.0
-                if len(hist) >= 2:
-                    prev = float(hist['Close'].iloc[-2])
-                    if prev > 0: chg = round((ltp - prev) / prev * 100, 2)
-                rows.append({'symbol': sym, 'ltp': ltp, 'chg': chg})
-            except: continue
-
-        return jsonify(rows)
-    except Exception as ex:
-        print(f'[index-stocks yfinance] {idx}: {ex}')
-        return jsonify({'error': f'{idx} ke stocks nahi mile'}), 500
+    # Return symbol list with 0 prices as last resort (at least tiles show)
+    rows = [{'symbol': s, 'ltp': 0, 'chg': 0.0} for s in syms]
+    return jsonify(rows)
 
 @app.route('/api/chartink-list')
 def api_chartink_list():
