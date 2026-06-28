@@ -1203,33 +1203,9 @@ def api_index_stocks():
         'NIFTY200 VALUE 30':['ITC','COALINDIA','ONGC','BPCL','HINDUNILVR','NTPC','SBIN','GAIL','VEDL','TATASTEEL','JSWSTEEL','HINDALCO','BHARTIARTL','MARUTI','M&M'],
     }
 
-    # 1. Try NSE API
-    try:
-        NSE_SESSION.get("https://www.nseindia.com", timeout=8)
-        enc = _req.utils.quote(idx)
-        r = NSE_SESSION.get(
-            f"https://www.nseindia.com/api/equity-stockIndices?index={enc}", timeout=15)
-        if r.status_code == 200:
-            rows = []
-            for item in r.json().get('data', []):
-                sym = (item.get('symbol') or '').strip()
-                if not sym or sym == idx: continue
-                try: chg = float(item.get('pChange', item.get('perChange', 0)))
-                except: chg = 0.0
-                try: ltp = float(str(item.get('lastPrice', item.get('ltp', 0))).replace(',', ''))
-                except: ltp = 0.0
-                rows.append({'symbol': sym, 'ltp': ltp, 'chg': chg})
-            if rows:
-                return jsonify(rows)
-    except Exception as ex:
-        print(f'[index-stocks NSE] {idx}: {ex}')
-
-    # 2. Fallback: Upstox batch (fast, works on cloud too)
+    # 1. Upstox batch — PRIMARY (fast, works everywhere, no IP blocking)
     syms = IDX_STOCKS.get(idx, [])
-    if not syms:
-        return jsonify([])
-
-    if _upstox_token and _upstox_instruments:
+    if syms and _upstox_token and _upstox_instruments:
         try:
             import requests as _rq2
             ikeys = []
@@ -1258,7 +1234,29 @@ def api_index_stocks():
         except Exception as ex:
             print(f'[index-stocks Upstox] {idx}: {ex}')
 
-    # 3. Last resort: symbol list without prices
+    # 2. NSE API — fallback (works locally, may be blocked on cloud)
+    try:
+        NSE_SESSION.get("https://www.nseindia.com", timeout=8)
+        enc = _req.utils.quote(idx)
+        r = NSE_SESSION.get(
+            f"https://www.nseindia.com/api/equity-stockIndices?index={enc}", timeout=15)
+        if r.status_code == 200:
+            rows = []
+            for item in r.json().get('data', []):
+                sym = (item.get('symbol') or '').strip()
+                if not sym or sym == idx: continue
+                try: chg = float(item.get('pChange', item.get('perChange', 0)))
+                except: chg = 0.0
+                try: ltp = float(str(item.get('lastPrice', item.get('ltp', 0))).replace(',', ''))
+                except: ltp = 0.0
+                rows.append({'symbol': sym, 'ltp': ltp, 'chg': chg})
+            if rows:
+                return jsonify(rows)
+    except Exception as ex:
+        print(f'[index-stocks NSE] {idx}: {ex}')
+
+    # 3. Last resort: symbol list without live prices (tiles show, grey color)
+    if not syms: syms = []
     return jsonify([{'symbol': s, 'ltp': 0, 'chg': 0.0} for s in syms])
 @app.route('/api/chartink-list')
 def api_chartink_list():
