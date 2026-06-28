@@ -1134,107 +1134,131 @@ def api_indices():
     try: return jsonify(_fetch_all_indices())
     except Exception as e: return jsonify({'error':str(e)}),500
 
+def _get_prices_upstox(syms):
+    """Batch fetch live prices from Upstox for a list of symbols. Returns [] if unavailable."""
+    if not _upstox_token or not _upstox_instruments:
+        return []
+    try:
+        import requests as _rq2
+        ikeys = []
+        with _instruments_lock:
+            for s in syms:
+                k = _upstox_instruments.get(s)
+                if k: ikeys.append((s, k))
+        if not ikeys:
+            return []
+        # Process in batches of 100 (Upstox limit)
+        all_rows = []
+        lmap = {}; cmap = {}
+        for i in range(0, len(ikeys), 100):
+            batch = ikeys[i:i+100]
+            kp = ','.join(k for _, k in batch)
+            ke = kp.replace('|', '%7C').replace(' ', '%20')
+            r = _rq2.get(
+                f'https://api.upstox.com/v2/market-quote/quotes?instrument_key={ke}',
+                headers=_upstox_headers(), timeout=12)
+            if r.status_code == 200:
+                for k, v in r.json().get('data', {}).items():
+                    sp = k.split(':')[-1].split('|')[-1].upper()
+                    ltp  = float(v.get('last_price', 0) or 0)
+                    prev = float((v.get('ohlc') or {}).get('close', 0) or 0)
+                    lmap[sp] = ltp
+                    cmap[sp] = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
+        rows = [{'symbol': s, 'ltp': round(lmap.get(s, 0), 2), 'chg': cmap.get(s, 0.0)}
+                for s in syms]
+        return rows if any(r['ltp'] > 0 for r in rows) else []
+    except Exception as ex:
+        print(f'[_get_prices_upstox] {ex}')
+        return []
+
 @app.route('/api/index-stocks')
 def api_index_stocks():
     idx = request.args.get('index', '').strip()
     if not idx: return jsonify([])
 
-    IDX_STOCKS = {
-        'NIFTY 50':['RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK','HINDUNILVR','SBIN','BHARTIARTL','ITC','KOTAKBANK','LT','AXISBANK','WIPRO','HCLTECH','ASIANPAINT','MARUTI','NTPC','SUNPHARMA','TATAMOTORS','POWERGRID','ULTRACEMCO','TITAN','BAJFINANCE','BAJAJFINSV','NESTLEIND','TECHM','ONGC','JSWSTEEL','TATASTEEL','BPCL','COALINDIA','GRASIM','INDUSINDBK','DIVISLAB','CIPLA','DRREDDY','APOLLOHOSP','TATACONSUM','BRITANNIA','HINDALCO','EICHERMOT','HEROMOTOCO','ADANIENT','ADANIPORTS','SBILIFE','HDFCLIFE','ICICIGI','M&M','TRENT','BAJAJ-AUTO'],
-        'NIFTY NEXT 50':['ADANIGREEN','AMBUJACEM','AUROPHARMA','BANDHANBNK','BANKBARODA','BEL','BERGEPAINT','BIOCON','BOSCHLTD','CHOLAFIN','COLPAL','CONCOR','DLF','GAIL','GODREJCP','GODREJPROP','HAL','HAVELLS','ICICIPRULI','INDHOTEL','INDUSTOWER','IOC','IRCTC','LUPIN','MARICO','MUTHOOTFIN','NAUKRI','NMDC','OFSS','PAGEIND','PIDILITIND','PNB','RECLTD','SAIL','SHREECEM','SIEMENS','SRF','TVSMOTOR','UBL','VOLTAS','ZYDUSLIFE','TORNTPHARM','MPHASIS','PERSISTENT','COFORGE','LTTS','HDFCAMC','SBICARD','VEDL','TRENT'],
-        'NIFTY 100':['RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK','HINDUNILVR','SBIN','BHARTIARTL','ITC','KOTAKBANK','LT','AXISBANK','WIPRO','HCLTECH','ASIANPAINT','MARUTI','ADANIENT','ADANIPORTS','BAJFINANCE','BAJAJFINSV','NTPC','SUNPHARMA','TATAMOTORS','POWERGRID','ULTRACEMCO','TITAN','NESTLEIND','TECHM','ONGC','JSWSTEEL','COALINDIA','GRASIM','INDUSINDBK','CIPLA','DRREDDY','APOLLOHOSP','TATACONSUM','BRITANNIA','HINDALCO','EICHERMOT','M&M','TRENT','HAL','DLF','GODREJCP','IRCTC','BANKBARODA','AMBUJACEM','PNB','SIEMENS'],
-        'NIFTY 200':['RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK','HINDUNILVR','SBIN','BHARTIARTL','ITC','KOTAKBANK','LT','AXISBANK','WIPRO','HCLTECH','ASIANPAINT','MARUTI','ADANIENT','BAJFINANCE','NTPC','SUNPHARMA','TATAMOTORS','POWERGRID','ULTRACEMCO','TITAN','NESTLEIND','TECHM','ONGC','JSWSTEEL','COALINDIA','GRASIM','CIPLA','DRREDDY','APOLLOHOSP','TATACONSUM','BRITANNIA','HINDALCO','EICHERMOT','M&M','HAL','DLF','IRCTC','BANKBARODA','AMBUJACEM','PNB','SIEMENS','HAVELLS','GODREJPROP','CHOLAFIN','MARICO','LUPIN'],
-        'NIFTY 500':['RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK','HINDUNILVR','SBIN','BHARTIARTL','ITC','KOTAKBANK','LT','AXISBANK','WIPRO','HCLTECH','ASIANPAINT','MARUTI','ADANIENT','BAJFINANCE','NTPC','SUNPHARMA','TATAMOTORS','POWERGRID','ULTRACEMCO','TITAN','NESTLEIND','TECHM','ONGC','JSWSTEEL','COALINDIA','GRASIM','CIPLA','DRREDDY','APOLLOHOSP','TATACONSUM','BRITANNIA','HINDALCO','EICHERMOT','M&M','HAL','DLF','IRCTC','BANKBARODA','AMBUJACEM','PNB','SIEMENS','HAVELLS','GODREJPROP','CHOLAFIN','MARICO','LUPIN'],
-        'NIFTY MIDCAP 50':['ABCAPITAL','ASTRAL','AUBANK','AUROPHARMA','BALKRISIND','BEL','BERGEPAINT','CHOLAFIN','COLPAL','DIXON','DLF','GODREJCP','HAVELLS','IRCTC','JUBLFOOD','LUPIN','MARICO','MCX','MUTHOOTFIN','NAUKRI','NMDC','PAGEIND','PERSISTENT','POLYCAB','RAMCOCEM','RBLBANK','SRF','TATACOMM','TRENT','ATUL','CUMMINSIND','DABUR','DEEPAKNTR','FEDERALBNK','GUJGASLTD','IPCALAB','LAURUSLABS','LTTS','M&MFIN','MANAPPURAM','MPHASIS','NAVINFLUOR','PIIND','RECLTD','TORNTPHARM','COFORGE','HAL','SIEMENS','TVSMOTOR','SHREECEM'],
-        'NIFTY MIDCAP 100':['ABCAPITAL','ASTRAL','AUBANK','AUROPHARMA','BALKRISIND','BANDHANBNK','BEL','BERGEPAINT','CHOLAFIN','COLPAL','DIXON','DLF','GODREJCP','HAVELLS','IRCTC','JUBLFOOD','LUPIN','MARICO','MCX','MUTHOOTFIN','NAUKRI','NMDC','PAGEIND','PERSISTENT','POLYCAB','RAMCOCEM','RBLBANK','SRF','TATACOMM','TRENT','ATUL','CUMMINSIND','DABUR','DEEPAKNTR','FEDERALBNK','GUJGASLTD','IPCALAB','LAURUSLABS','LTTS','M&MFIN','MANAPPURAM','MPHASIS','NAVINFLUOR','PIIND','RECLTD','TORNTPHARM','COFORGE','HAL','SIEMENS','TVSMOTOR'],
-        'NIFTY MIDCAP 150':['ABCAPITAL','ASTRAL','AUBANK','AUROPHARMA','BALKRISIND','BANDHANBNK','BEL','BERGEPAINT','CHOLAFIN','COLPAL','DIXON','DLF','GODREJCP','HAVELLS','IRCTC','JUBLFOOD','LUPIN','MARICO','MCX','MUTHOOTFIN','NAUKRI','NMDC','PAGEIND','PERSISTENT','POLYCAB','RAMCOCEM','RBLBANK','SRF','TATACOMM','TRENT','ATUL','CUMMINSIND','DABUR','DEEPAKNTR','FEDERALBNK','GUJGASLTD','IPCALAB','LAURUSLABS','LTTS','M&MFIN','MANAPPURAM','MPHASIS','NAVINFLUOR','PIIND','RECLTD','TORNTPHARM','COFORGE','HAL','SIEMENS','TVSMOTOR'],
-        'NIFTY MID SELECT':['ABCAPITAL','ASTRAL','AUBANK','AUROPHARMA','BEL','BERGEPAINT','CHOLAFIN','COLPAL','DIXON','DLF','GODREJCP','HAVELLS','IRCTC','JUBLFOOD','LUPIN','MARICO','MCX','MUTHOOTFIN','NAUKRI','NMDC','PAGEIND','PERSISTENT','POLYCAB','RAMCOCEM','SRF','TATACOMM','TRENT'],
-        'NIFTY LARGEMID250':['RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK','HINDUNILVR','SBIN','BHARTIARTL','ITC','KOTAKBANK','LT','AXISBANK','WIPRO','HCLTECH','ASIANPAINT','MARUTI','ADANIENT','BAJFINANCE','NTPC','SUNPHARMA','TATAMOTORS','POWERGRID','ULTRACEMCO','TITAN','NESTLEIND','TECHM','ONGC','JSWSTEEL','COALINDIA','GRASIM'],
-        'NIFTY BANK':['HDFCBANK','ICICIBANK','KOTAKBANK','AXISBANK','SBIN','BANDHANBNK','FEDERALBNK','INDUSINDBK','IDFCFIRSTB','AUBANK','PNB','BANKBARODA'],
-        'NIFTY AUTO':['MARUTI','TATAMOTORS','M&M','BAJAJ-AUTO','HEROMOTOCO','EICHERMOT','TVSMOTOR','BOSCHLTD','MOTHERSON','APOLLOTYRE','BHARATFORG','MRF','EXIDEIND','BALKRISIND','ESCORTS'],
-        'NIFTY IT':['TCS','INFY','HCLTECH','WIPRO','TECHM','MPHASIS','LTTS','COFORGE','PERSISTENT','OFSS'],
-        'NIFTY PHARMA':['SUNPHARMA','DRREDDY','CIPLA','DIVISLAB','AUROPHARMA','TORNTPHARM','ALKEM','BIOCON','LUPIN','IPCALAB','LAURUSLABS','GRANULES','GLENMARK','ZYDUSLIFE','ABBOTINDIA'],
-        'NIFTY FMCG':['HINDUNILVR','ITC','NESTLEIND','BRITANNIA','DABUR','MARICO','COLPAL','GODREJCP','TATACONSUM','UBL','MCDOWELL-N','VBL'],
-        'NIFTY METAL':['TATASTEEL','JSWSTEEL','HINDALCO','VEDL','COALINDIA','NMDC','SAIL','NATIONALUM','HINDCOPPER','MOIL','WELCORP'],
-        'NIFTY REALTY':['DLF','GODREJPROP','OBEROIRLTY','PRESTIGE','PHOENIXLTD','SOBHA','BRIGADE','MAHLIFE'],
-        'NIFTY PSU BANK':['SBIN','PNB','BANKBARODA','CANBK','UNIONBANK','IOB','INDIANB','BANKINDIA','CENTRALBK','MAHABANK'],
-        'NIFTY FIN SERVICE':['HDFCBANK','ICICIBANK','KOTAKBANK','AXISBANK','SBIN','BAJFINANCE','BAJAJFINSV','HDFCLIFE','SBILIFE','ICICIGI','ICICIPRULI','MUTHOOTFIN','CHOLAFIN','LICHSGFIN','MANAPPURAM'],
-        'NIFTY FINSRV25 50':['HDFCBANK','ICICIBANK','KOTAKBANK','AXISBANK','SBIN','BAJFINANCE','BAJAJFINSV','HDFCLIFE','SBILIFE','ICICIGI','ICICIPRULI','MUTHOOTFIN','CHOLAFIN','LICHSGFIN','MANAPPURAM','BANDHANBNK','AUBANK','FEDERALBNK','INDUSINDBK','IDFCFIRSTB','PNB','BANKBARODA','RECLTD','PFC','HDFCAMC'],
-        'NIFTY FINSEREXBNK':['BAJFINANCE','BAJAJFINSV','HDFCLIFE','SBILIFE','ICICIGI','ICICIPRULI','MUTHOOTFIN','CHOLAFIN','LICHSGFIN','MANAPPURAM','HDFCAMC','CAMS','ANGELONE','CDSL'],
-        'NIFTY MEDIA':['SUNTV','ZEEL','PVRINOX','NAZARA'],
-        'NIFTY OIL AND GAS':['RELIANCE','ONGC','BPCL','IOC','HINDPETRO','GAIL','MGL','IGL','GUJGASLTD','PETRONET'],
-        'NIFTY HEALTHCARE':['SUNPHARMA','DRREDDY','CIPLA','DIVISLAB','APOLLOHOSP','FORTIS','MAXHEALTH','METROPOLIS','LALPATHLAB','SYNGENE'],
-        'NIFTY CONSR DURBL':['HAVELLS','VOLTAS','CROMPTON','BLUESTAR','KAJARIACER','WHIRLPOOL','SYMPHONY','AMBER','BATAINDIA'],
-        'NIFTY PVT BANK':['HDFCBANK','ICICIBANK','KOTAKBANK','AXISBANK','BANDHANBNK','FEDERALBNK','INDUSINDBK','IDFCFIRSTB','AUBANK','RBLBANK'],
-        'NIFTY CHEMICALS':['PIDILITIND','SRF','DEEPAKNTR','NAVINFLUOR','ATUL','FINEORG','TATACHEM','GNFC'],
-        'NIFTY MIDSML HLTH':['APOLLOHOSP','FORTIS','MAXHEALTH','METROPOLIS','LALPATHLAB','SYNGENE','IPCALAB','LAURUSLABS','GRANULES','GLENMARK','ZYDUSLIFE','ALKEM','BIOCON'],
-        'NIFTY MS IT TELCM':['TCS','INFY','HCLTECH','WIPRO','TECHM','MPHASIS','LTTS','COFORGE','PERSISTENT','OFSS','BHARTIARTL','INDUSTOWER'],
-        'NIFTY MS FIN SERV':['HDFCBANK','ICICIBANK','KOTAKBANK','AXISBANK','BAJFINANCE','BAJAJFINSV','SBIN','HDFCLIFE','SBILIFE','ICICIGI'],
-        'NIFTY COMMODITIES':['RELIANCE','ONGC','COALINDIA','HINDALCO','VEDL','TATASTEEL','JSWSTEEL','BPCL','IOC','NMDC','GAIL','HINDPETRO','SAIL','NATIONALUM','MOIL'],
-        'NIFTY CONSUMPTION':['HINDUNILVR','ITC','NESTLEIND','BRITANNIA','DABUR','MARICO','COLPAL','GODREJCP','TATACONSUM','UBL','MCDOWELL-N','BATAINDIA','TITAN','MARUTI','EICHERMOT'],
-        'NIFTY INFRA':['LT','NTPC','POWERGRID','ADANIPORTS','BHEL','CONCOR','ADANIENT','HAL','BEL','IRCTC','SIEMENS','ABB','CUMMINSIND','THERMAX','KEC'],
-        'NIFTY ENERGY':['RELIANCE','NTPC','ONGC','POWERGRID','BPCL','IOC','GAIL','HINDPETRO','TATAPOWER','ADANIGREEN','ADANIPORTS'],
-        'NIFTY CPSE':['NTPC','POWERGRID','ONGC','COALINDIA','BPCL','IOC','BHEL','HAL','BEL','SAIL','GAIL','NMDC','HINDCOPPER','MOIL','RECLTD'],
-        'NIFTY MNC':['HINDUNILVR','NESTLEIND','BRITANNIA','ABBOTINDIA','BOSCHLTD','SIEMENS','ABB','MCDOWELL-N','GILLETTE','PFIZER'],
-        'NIFTY PSE':['NTPC','POWERGRID','ONGC','COALINDIA','BPCL','IOC','BHEL','HAL','BEL','SAIL','GAIL','NMDC','HINDCOPPER','MOIL','RECLTD','CONCOR','IRCTC','CANBK','BANKBARODA','PNB'],
-        'NIFTY SERV SECTOR':['TCS','INFY','HCLTECH','WIPRO','TECHM','BHARTIARTL','ICICIBANK','HDFCBANK','KOTAKBANK','AXISBANK','SBIN','LT','IRCTC','NAUKRI','INDHOTEL'],
-        'NIFTY INDIA MFG':['LT','TATASTEEL','JSWSTEEL','HINDALCO','BHEL','HAL','BEL','SIEMENS','ABB','CUMMINSIND','THERMAX','KEC'],
-        'NIFTY IND DIGITAL':['TCS','INFY','HCLTECH','WIPRO','TECHM','BHARTIARTL','NAUKRI','IRCTC','PERSISTENT','COFORGE','MPHASIS','LTTS'],
-        'NIFTY IND DEFENCE':['HAL','BEL','BHEL','BEML','MIDHANI','COCHINSHIP','GARDENREACH','GRSE'],
-        'NIFTY CAPITAL MKT':['BSE','CDSL','MCX','NAUKRI','HDFCAMC','MUTHOOTFIN','ANGELONE','CAMS'],
-        'NIFTY EV':['TATAMOTORS','M&M','BAJAJ-AUTO','TVSMOTOR','HEROMOTOCO','MOTHERSON','EXIDEIND'],
-        'NIFTY HOUSING':['DLF','GODREJPROP','OBEROIRLTY','PRESTIGE','PHOENIXLTD','SOBHA','BRIGADE','MAHLIFE'],
-        'NIFTY MOBILITY':['MARUTI','TATAMOTORS','M&M','BAJAJ-AUTO','HEROMOTOCO','EICHERMOT','TVSMOTOR','BOSCHLTD','MOTHERSON','APOLLOTYRE'],
-        'NIFTY IND TOURISM':['INDHOTEL','LEMONTREE','CHALET','EIH','TAJGVK'],
-        'NIFTY TRANS LOGIS':['ADANIPORTS','CONCOR','IRCTC','BLUEDART','TCI','AEGISLOG'],
-        'NIFTY RAILWAYSPSU':['IRCTC','RVNL','IRFC','BEML','TITAGARH'],
-        'NIFTY RURAL':['TATACONSUM','DABUR','MARICO','COLPAL','GODREJCP','ITC','EMAMILTD'],
-        'NIFTY INTERNET':['NAUKRI','IRCTC','INDIAMART','JUSTDIAL','ZOMATO','NYKAA'],
-        'NIFTY COREHOUSING':['DLF','GODREJPROP','OBEROIRLTY','PRESTIGE','PHOENIXLTD','SOBHA','BRIGADE','MAHLIFE','JKCEMENT','ULTRACEMCO','AMBUJACEM','SHREECEM','ACC','DALBHARAT'],
-        'NIFTY DIV OPPS 50':['ITC','COALINDIA','ONGC','BPCL','HINDUNILVR','NTPC','POWERGRID','IOC','SBIN','GAIL','VEDL','NMDC','SAIL','NATIONALUM','HINDCOPPER'],
-        'NIFTY50 VALUE 20':['ITC','COALINDIA','ONGC','BPCL','HINDUNILVR','NTPC','SBIN','GAIL','VEDL','TATASTEEL','JSWSTEEL','HINDALCO','BHARTIARTL','MARUTI','M&M','LT','AXISBANK','HCLTECH','WIPRO','INFY'],
-        'NIFTY100 QUALTY30':['TCS','INFY','HINDUNILVR','NESTLEIND','BAJFINANCE','HDFCBANK','ICICIBANK','TITAN','ASIANPAINT','BRITANNIA','DABUR','COLPAL','MARICO','WIPRO','HCLTECH'],
-        'NIFTY ALPHA 50':['RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK','BHARTIARTL','BAJFINANCE','LT','TITAN','ASIANPAINT','MARUTI','SUNPHARMA','WIPRO','ULTRACEMCO','NESTLEIND'],
-        'NIFTY100 LOWVOL30':['HINDUNILVR','NESTLEIND','BRITANNIA','DABUR','COLPAL','MARICO','ITC','WIPRO','INFY','TCS','HCLTECH','OFSS','TECHM','DRREDDY','CIPLA'],
-        'NIFTY200 QUALTY30':['TCS','INFY','HINDUNILVR','NESTLEIND','BAJFINANCE','HDFCBANK','ICICIBANK','TITAN','ASIANPAINT','BRITANNIA','DABUR','COLPAL','MARICO','WIPRO','HCLTECH'],
-        'NIFTY HIGHBETA 50':['ADANIENT','ADANIPORTS','TATAMOTORS','TATASTEEL','JSWSTEEL','HINDALCO','VEDL','SAIL','BANKBARODA','PNB','BANDHANBNK','IDFCFIRSTB','RBLBANK','DLF','GODREJPROP'],
-        'NIFTY LOW VOL 50':['HINDUNILVR','NESTLEIND','BRITANNIA','DABUR','COLPAL','MARICO','ITC','WIPRO','INFY','TCS','HCLTECH','OFSS','TECHM','DRREDDY','CIPLA'],
-        'NIFTY200 ALPHA 30':['RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK','BHARTIARTL','BAJFINANCE','LT','TITAN','ASIANPAINT'],
-        'NIFTY200 VALUE 30':['ITC','COALINDIA','ONGC','BPCL','HINDUNILVR','NTPC','SBIN','GAIL','VEDL','TATASTEEL','JSWSTEEL','HINDALCO','BHARTIARTL','MARUTI','M&M'],
+    # ── NSE CSV filename map (archives.nseindia.com — not blocked) ─────────────
+    NSE_CSV = {
+        'NIFTY 50':         'ind_nifty50list.csv',
+        'NIFTY NEXT 50':    'ind_niftynext50list.csv',
+        'NIFTY 100':        'ind_nifty100list.csv',
+        'NIFTY 200':        'ind_nifty200list.csv',
+        'NIFTY 500':        'ind_nifty500list.csv',
+        'NIFTY MIDCAP 50':  'ind_niftymidcap50list.csv',
+        'NIFTY MIDCAP 100': 'ind_niftymidcap100list.csv',
+        'NIFTY MIDCAP 150': 'ind_niftymidcap150list.csv',
+        'NIFTY SMLCAP 50':  'ind_niftysmlcap50list.csv',
+        'NIFTY SMLCAP 100': 'ind_niftysmlcap100list.csv',
+        'NIFTY SMLCAP 250': 'ind_niftysmlcap250list.csv',
+        'NIFTY LARGEMID250':'ind_niftylargemid250list.csv',
+        'NIFTY MID SELECT': 'ind_niftymidselect.csv',
+        'NIFTY BANK':       'ind_niftybanklist.csv',
+        'NIFTY AUTO':       'ind_niftyautolist.csv',
+        'NIFTY IT':         'ind_niftyitlist.csv',
+        'NIFTY PHARMA':     'ind_niftypharmalist.csv',
+        'NIFTY FMCG':       'ind_niftyfmcglist.csv',
+        'NIFTY METAL':      'ind_niftymetallist.csv',
+        'NIFTY REALTY':     'ind_niftyrealtylist.csv',
+        'NIFTY PSU BANK':   'ind_niftypsubanklist.csv',
+        'NIFTY FIN SERVICE':'ind_niftyfinancelist.csv',
+        'NIFTY MEDIA':      'ind_niftymedialist.csv',
+        'NIFTY OIL AND GAS':'ind_niftyoilgaslist.csv',
+        'NIFTY HEALTHCARE': 'ind_niftyhealthcarelist.csv',
+        'NIFTY CONSR DURBL':'ind_niftyconsumerdurablelist.csv',
+        'NIFTY PVT BANK':   'ind_nifty_privatebanklist.csv',
+        'NIFTY COMMODITIES':'ind_niftycommoditieslist.csv',
+        'NIFTY CONSUMPTION':'ind_niftyconsumptionlist.csv',
+        'NIFTY INFRA':      'ind_niftyinfralist.csv',
+        'NIFTY ENERGY':     'ind_niftyenergylist.csv',
+        'NIFTY CPSE':       'ind_niftycpselist.csv',
+        'NIFTY MNC':        'ind_niftymnclist.csv',
+        'NIFTY PSE':        'ind_niftypselist.csv',
+        'NIFTY SERV SECTOR':'ind_niftyservicesectorlist.csv',
+        'NIFTY INDIA MFG':  'ind_niftyindiamfglist.csv',
+        'NIFTY IND DEFENCE':'ind_niftyindiadefencelist.csv',
+        'NIFTY IND DIGITAL':'ind_niftyindigitallist.csv',
+        'NIFTY CAPITAL MKT':'ind_niftyCapitalMarkets.csv',
+        'NIFTY HOUSING':    'ind_niftyhousinglist.csv',
+        'NIFTY MOBILITY':   'ind_niftymobilitylist.csv',
+        'NIFTY TRANS LOGIS':'ind_niftytransportlogisticslist.csv',
+        'NIFTY RAILWAYSPSU':'ind_niftyrailwaypsulist.csv',
+        'NIFTY RURAL':      'ind_niftyrural.csv',
+        'NIFTY IND TOURISM':'ind_niftyindiatourismlist.csv',
+        'NIFTY DIV OPPS 50':'ind_niftydividendopportunities50list.csv',
+        'NIFTY ALPHA 50':   'ind_niftyalpha50list.csv',
+        'NIFTY100 QUALTY30':'ind_nifty100qualitylist.csv',
+        'NIFTY100 LOWVOL30':'ind_nifty100lowvolatilitylist.csv',
+        'NIFTY200 QUALTY30':'ind_nifty200qualitylist.csv',
+        'NIFTY HIGHBETA 50':'ind_niftyhighbeta50list.csv',
+        'NIFTY LOW VOL 50': 'ind_niftylowvol50list.csv',
+        'NIFTY50 VALUE 20': 'ind_nifty50valuelist.csv',
     }
 
-    # 1. Upstox batch — PRIMARY (fast, works everywhere, no IP blocking)
-    syms = IDX_STOCKS.get(idx, [])
-    if syms and _upstox_token and _upstox_instruments:
+    # ── 1. NSE Archives CSV (most accurate, all stocks) ───────────────────────
+    csv_file = NSE_CSV.get(idx)
+    if csv_file:
         try:
+            import csv as _csv, io as _io
             import requests as _rq2
-            ikeys = []
-            with _instruments_lock:
-                for s in syms:
-                    k = _upstox_instruments.get(s)
-                    if k: ikeys.append((s, k))
-            if ikeys:
-                kp = ','.join(k for _, k in ikeys[:100])
-                ke = kp.replace('|', '%7C').replace(' ', '%20')
-                r2 = _rq2.get(
-                    f'https://api.upstox.com/v2/market-quote/quotes?instrument_key={ke}',
-                    headers=_upstox_headers(), timeout=12)
-                if r2.status_code == 200:
-                    qd = r2.json().get('data', {})
-                    lmap = {}; cmap = {}
-                    for k, v in qd.items():
-                        sp = k.split(':')[-1].split('|')[-1].upper()
-                        ltp  = float(v.get('last_price', 0) or 0)
-                        prev = float((v.get('ohlc') or {}).get('close', 0) or 0)
-                        lmap[sp] = ltp
-                        cmap[sp] = round((ltp-prev)/prev*100, 2) if prev > 0 else 0.0
-                    rows = [{'symbol': s, 'ltp': round(lmap.get(s,0),2), 'chg': cmap.get(s,0.0)} for s in syms]
-                    if any(r['ltp'] > 0 for r in rows):
+            csv_url = f'https://archives.nseindia.com/content/indices/{csv_file}'
+            r = _rq2.get(csv_url,
+                         headers={'User-Agent': 'Mozilla/5.0'},
+                         timeout=10)
+            if r.status_code == 200:
+                reader = _csv.DictReader(_io.StringIO(r.text))
+                syms_from_csv = [row.get('Symbol','').strip() for row in reader
+                                 if row.get('Symbol','').strip()]
+                if syms_from_csv:
+                    # Now get live prices from Upstox for these symbols
+                    rows = _get_prices_upstox(syms_from_csv)
+                    if rows:
                         return jsonify(rows)
+                    # Return symbols without prices if Upstox unavailable
+                    return jsonify([{'symbol': s, 'ltp': 0, 'chg': 0.0}
+                                    for s in syms_from_csv])
         except Exception as ex:
-            print(f'[index-stocks Upstox] {idx}: {ex}')
+            print(f'[index-stocks CSV] {idx}: {ex}')
 
-    # 2. NSE API — fallback (works locally, may be blocked on cloud)
+    # ── 2. NSE equity-stockIndices API ────────────────────────────────────────
     try:
         NSE_SESSION.get("https://www.nseindia.com", timeout=8)
         enc = _req.utils.quote(idx)
@@ -1255,8 +1279,20 @@ def api_index_stocks():
     except Exception as ex:
         print(f'[index-stocks NSE] {idx}: {ex}')
 
-    # 3. Last resort: symbol list without live prices (tiles show, grey color)
-    if not syms: syms = []
+    # ── 3. Hardcoded fallback ─────────────────────────────────────────────────
+    IDX_FALLBACK = {
+        'NIFTY 50':['RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK','HINDUNILVR','SBIN','BHARTIARTL','ITC','KOTAKBANK','LT','AXISBANK','WIPRO','HCLTECH','ASIANPAINT','MARUTI','NTPC','SUNPHARMA','TATAMOTORS','POWERGRID','ULTRACEMCO','TITAN','BAJFINANCE','BAJAJFINSV','NESTLEIND','TECHM','ONGC','JSWSTEEL','TATASTEEL','BPCL','COALINDIA','GRASIM','INDUSINDBK','DIVISLAB','CIPLA','DRREDDY','APOLLOHOSP','TATACONSUM','BRITANNIA','HINDALCO','EICHERMOT','HEROMOTOCO','ADANIENT','ADANIPORTS','SBILIFE','HDFCLIFE','ICICIGI','M&M','TRENT','BAJAJ-AUTO'],
+        'NIFTY BANK':['HDFCBANK','ICICIBANK','KOTAKBANK','AXISBANK','SBIN','BANDHANBNK','FEDERALBNK','INDUSINDBK','IDFCFIRSTB','AUBANK','PNB','BANKBARODA'],
+        'NIFTY AUTO':['MARUTI','TATAMOTORS','M&M','BAJAJ-AUTO','HEROMOTOCO','EICHERMOT','TVSMOTOR','BOSCHLTD','MOTHERSON','APOLLOTYRE','BHARATFORG','MRF','EXIDEIND','BALKRISIND','ESCORTS'],
+        'NIFTY IT':['TCS','INFY','HCLTECH','WIPRO','TECHM','MPHASIS','LTTS','COFORGE','PERSISTENT','OFSS'],
+        'NIFTY PHARMA':['SUNPHARMA','DRREDDY','CIPLA','DIVISLAB','AUROPHARMA','TORNTPHARM','ALKEM','BIOCON','LUPIN','IPCALAB','LAURUSLABS','GRANULES','GLENMARK','ZYDUSLIFE','ABBOTINDIA'],
+        'NIFTY FMCG':['HINDUNILVR','ITC','NESTLEIND','BRITANNIA','DABUR','MARICO','COLPAL','GODREJCP','TATACONSUM','UBL','MCDOWELL-N'],
+        'NIFTY METAL':['TATASTEEL','JSWSTEEL','HINDALCO','VEDL','COALINDIA','NMDC','SAIL','NATIONALUM','HINDCOPPER','MOIL'],
+    }
+    syms = IDX_FALLBACK.get(idx, [])
+    if syms:
+        rows = _get_prices_upstox(syms)
+        if rows: return jsonify(rows)
     return jsonify([{'symbol': s, 'ltp': 0, 'chg': 0.0} for s in syms])
 @app.route('/api/chartink-list')
 def api_chartink_list():
