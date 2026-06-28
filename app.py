@@ -1199,20 +1199,31 @@ def api_index_stocks():
             return jsonify({'error': f'{idx} ke stocks nahi mile — NSE API unavailable'})
 
         tickers = [f'{s}.NS' for s in syms]
-        data = yf.download(tickers, period='2d', interval='1d',
-                           auto_adjust=True, progress=False, group_by='ticker')
-
+        # Download one by one to avoid multi-ticker column grouping issues
         rows = []
+        # Batch download with Tickers for reliability
+        import yfinance as yf
+        ticker_str = ' '.join(tickers)
+        data = yf.download(ticker_str, period='2d', interval='1d',
+                           auto_adjust=True, progress=False, group_by='ticker',
+                           threads=True)
+
         for sym in syms:
             try:
                 yf_sym = f'{sym}.NS'
-                if len(tickers) > 1:
-                    lvl0 = data.columns.get_level_values(0)
-                    if yf_sym not in lvl0: continue
+                # Handle both single and multi ticker responses
+                if hasattr(data.columns, 'levels') and yf_sym in data.columns.get_level_values(0):
                     hist = data[yf_sym].dropna(subset=['Close'])
-                else:
+                elif 'Close' in data.columns and len(tickers) == 1:
                     hist = data.dropna(subset=['Close'])
-                if hist.empty: continue
+                else:
+                    # Try individual fetch as last resort
+                    h2 = yf.download(yf_sym, period='2d', interval='1d', auto_adjust=True, progress=False)
+                    if h2 is None or h2.empty: continue
+                    if hasattr(h2.columns, 'levels'): h2.columns = h2.columns.get_level_values(0)
+                    hist = h2.dropna(subset=['Close'])
+
+                if hist is None or hist.empty: continue
                 ltp = round(float(hist['Close'].iloc[-1]), 2)
                 chg = 0.0
                 if len(hist) >= 2:
