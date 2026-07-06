@@ -1560,33 +1560,65 @@ def _etf_index_category(symbol, name):
 
 @app.route('/api/news/<sym>')
 def api_news(sym):
-    sym=sym.upper(); news=[]; docs=[]
+    sym = sym.upper()
+    news = []; docs = []
+
+    # ── 1. Try NSE corp announcements ──────────────────────────────────────────
     try:
-        NSE_SESSION.get("https://www.nseindia.com",timeout=8)
-        NSE_SESSION.get(f"https://www.nseindia.com/get-quote/equity/{sym}",timeout=8)
-    except: pass
-    try:
-        r=NSE_SESSION.get(f"https://www.nseindia.com/api/corp-info?symbol={sym}&corpType=announcement&market=equities",timeout=12)
-        if r.status_code==200:
-            raw=r.json(); items=raw if isinstance(raw,list) else raw.get('data',[])
+        NSE_SESSION.get("https://www.nseindia.com", timeout=8)
+        NSE_SESSION.get(f"https://www.nseindia.com/get-quote/equity/{sym}", timeout=8)
+        r = NSE_SESSION.get(
+            f"https://www.nseindia.com/api/corp-info?symbol={sym}&corpType=announcement&market=equities",
+            timeout=12)
+        if r.status_code == 200:
+            raw   = r.json()
+            items = raw if isinstance(raw, list) else raw.get('data', [])
             for item in (items or [])[:6]:
-                title=(item.get('subject') or item.get('desc') or '').strip()
-                date=(item.get('exchdisstime') or '')[:10]
-                att=(item.get('attchmntFile') or '').strip()
-                link=(att if att.startswith('http') else f"https://nsearchives.nseindia.com{att}") if att else f"https://www.nseindia.com/get-quotes/equity?symbol={sym}"
-                if title: news.append({'title':title[:90],'date':date,'link':link})
+                title = (item.get('subject') or item.get('desc') or '').strip()
+                date  = (item.get('exchdisstime') or '')[:10]
+                att   = (item.get('attchmntFile') or '').strip()
+                link  = (att if att.startswith('http')
+                         else f"https://nsearchives.nseindia.com{att}") if att \
+                        else f"https://www.nseindia.com/get-quotes/equity?symbol={sym}"
+                if title:
+                    news.append({'title': title[:90], 'date': date, 'link': link, 'source': 'NSE'})
     except: pass
+
+    # ── 2. NSE annual reports ───────────────────────────────────────────────────
     try:
-        r=NSE_SESSION.get(f"https://www.nseindia.com/api/annual-reports?index=equities&symbol={sym}",timeout=12)
-        if r.status_code==200:
-            raw=r.json(); reports=raw.get('data',raw) if isinstance(raw,dict) else raw
+        r = NSE_SESSION.get(
+            f"https://www.nseindia.com/api/annual-reports?index=equities&symbol={sym}",
+            timeout=12)
+        if r.status_code == 200:
+            raw     = r.json()
+            reports = raw.get('data', raw) if isinstance(raw, dict) else raw
             for rep in (reports or [])[:3]:
-                fname=(rep.get('fileName') or '').strip()
-                label=f"FY {rep.get('fromYr','')}-{rep.get('toYr','')}"
+                fname = (rep.get('fileName') or '').strip()
+                label = f"FY {rep.get('fromYr','')}-{rep.get('toYr','')}"
                 if fname and fname.startswith('http'):
-                    docs.append({'title':f"Annual Report {label}",'link':fname})
+                    docs.append({'title': f"Annual Report {label}", 'link': fname})
     except: pass
-    return jsonify({'news':news,'docs':docs})
+
+    # ── 3. Fallback: Google News RSS (always works) ────────────────────────────
+    if not news:
+        try:
+            import xml.etree.ElementTree as ET
+            import requests as _rq
+            query = f"{sym} NSE stock"
+            rss_url = f"https://news.google.com/rss/search?q={_rq.utils.quote(query)}+when:7d&hl=en-IN&gl=IN&ceid=IN:en"
+            rr = _rq.get(rss_url, timeout=10,
+                         headers={'User-Agent': 'Mozilla/5.0'})
+            if rr.status_code == 200:
+                root = ET.fromstring(rr.content)
+                for item in root.findall('.//item')[:5]:
+                    title = (item.findtext('title') or '').strip()
+                    link  = (item.findtext('link')  or '').strip()
+                    pub   = (item.findtext('pubDate') or '')[:16]
+                    if title and link:
+                        news.append({'title': title[:100], 'date': pub, 'link': link, 'source': 'Google News'})
+        except: pass
+
+    return jsonify({'news': news, 'docs': docs})
 
 @app.route('/api/ipo')
 def api_ipo():
