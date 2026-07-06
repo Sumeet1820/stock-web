@@ -1563,25 +1563,25 @@ def api_news(sym):
     sym = sym.upper()
     news = []; docs = []
 
-    # ── 1. Try NSE corp announcements ──────────────────────────────────────────
+    # ── 1. NSE corporate-announcements API (returns PDF links) ────────────────
     try:
         NSE_SESSION.get("https://www.nseindia.com", timeout=8)
-        NSE_SESSION.get(f"https://www.nseindia.com/get-quote/equity/{sym}", timeout=8)
+        NSE_SESSION.get(
+            f"https://www.nseindia.com/companies-listing/corporate-filings-announcements?symbol={sym}",
+            timeout=8)
         r = NSE_SESSION.get(
-            f"https://www.nseindia.com/api/corp-info?symbol={sym}&corpType=announcement&market=equities",
+            f"https://www.nseindia.com/api/corporate-announcements?index=equities&symbol={sym}",
             timeout=12)
-        if r.status_code == 200:
-            raw   = r.json()
-            items = raw if isinstance(raw, list) else raw.get('data', [])
-            for item in (items or [])[:6]:
-                title = (item.get('subject') or item.get('desc') or '').strip()
-                date  = (item.get('exchdisstime') or '')[:10]
-                att   = (item.get('attchmntFile') or '').strip()
-                link  = (att if att.startswith('http')
-                         else f"https://nsearchives.nseindia.com{att}") if att \
-                        else f"https://www.nseindia.com/get-quotes/equity?symbol={sym}"
+        if r.status_code == 200 and len(r.content) > 50:
+            items = r.json() if isinstance(r.json(), list) else []
+            for item in items[:5]:
+                title = (item.get('attchmntText') or item.get('desc') or '').strip()
+                date  = (item.get('an_dt') or '')[:10]
+                link  = (item.get('attchmntFile') or '').strip()
+                if not link:
+                    link = f"https://www.nseindia.com/get-quotes/equity?symbol={sym}"
                 if title:
-                    news.append({'title': title[:90], 'date': date, 'link': link, 'source': 'NSE'})
+                    news.append({'title': title[:120], 'date': date, 'link': link, 'source': 'NSE'})
     except: pass
 
     # ── 2. NSE annual reports ───────────────────────────────────────────────────
@@ -1599,15 +1599,33 @@ def api_news(sym):
                     docs.append({'title': f"Annual Report {label}", 'link': fname})
     except: pass
 
-    # ── 3. Fallback: Google News RSS (always works) ────────────────────────────
+    # ── 3. Fallback: Economic Times RSS + Google News RSS ─────────────────────
     if not news:
         try:
             import xml.etree.ElementTree as ET
             import requests as _rq
-            query = f"{sym} NSE stock"
+
+            # Economic Times stock-specific RSS (works reliably)
+            et_url = f"https://economictimes.indiatimes.com/markets/stocks/news/{sym.lower()}/rssfeeds/17096.cms"
+            rr = _rq.get(et_url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+            if rr.status_code == 200 and rr.content:
+                root = ET.fromstring(rr.content)
+                for item in root.findall('.//item')[:5]:
+                    title = (item.findtext('title') or '').strip()
+                    link  = (item.findtext('link')  or '').strip()
+                    pub   = (item.findtext('pubDate') or '')[:16]
+                    if title and link:
+                        news.append({'title': title[:120], 'date': pub, 'link': link, 'source': 'Economic Times'})
+        except: pass
+
+    if not news:
+        try:
+            import xml.etree.ElementTree as ET
+            import requests as _rq
+            # Google News RSS fallback
+            query   = f"{sym} NSE India stock"
             rss_url = f"https://news.google.com/rss/search?q={_rq.utils.quote(query)}+when:7d&hl=en-IN&gl=IN&ceid=IN:en"
-            rr = _rq.get(rss_url, timeout=10,
-                         headers={'User-Agent': 'Mozilla/5.0'})
+            rr = _rq.get(rss_url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
             if rr.status_code == 200:
                 root = ET.fromstring(rr.content)
                 for item in root.findall('.//item')[:5]:
@@ -1615,7 +1633,7 @@ def api_news(sym):
                     link  = (item.findtext('link')  or '').strip()
                     pub   = (item.findtext('pubDate') or '')[:16]
                     if title and link:
-                        news.append({'title': title[:100], 'date': pub, 'link': link, 'source': 'Google News'})
+                        news.append({'title': title[:120], 'date': pub, 'link': link, 'source': 'Google News'})
         except: pass
 
     return jsonify({'news': news, 'docs': docs})
