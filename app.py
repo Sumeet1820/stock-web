@@ -1223,8 +1223,6 @@ def api_index_stocks():
                 return jsonify(rows)
     except Exception as ex:
         print(f'[NSE lib] {idx}: {ex}')
-
-    # ── 2. NSE Archives CSV (exact constituents, works for most indices) ──────────
     NSE_CSV = {
         'NIFTY 50': 'ind_nifty50list.csv', 'NIFTY NEXT 50': 'ind_niftynext50list.csv',
         'NIFTY 100': 'ind_nifty100list.csv', 'NIFTY 200': 'ind_nifty200list.csv',
