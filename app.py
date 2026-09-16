@@ -1250,16 +1250,19 @@ def api_index_stocks():
         'NIFTY500 LOWVOL50': 'ind_nifty500list.csv', 'NIFTY500 MQVLV50': 'ind_nifty500list.csv',
         'NIFTY500 FLEXICAP': 'ind_nifty500list.csv', 'NIFTY TMMQ 50': 'ind_nifty500list.csv',
         'NIFTY GROWSECT 15': 'ind_nifty100list.csv', 'NIFTY50 USD': 'ind_nifty50list.csv',
-        'NIFTY100 LIQ 15': 'ind_nifty100list.csv', 'NIFTY MID LIQ 15': 'ind_niftymidcap50list.csv',
-        'NIFTY100 ESG': 'ind_nifty100list.csv', 'NIFTY100ESGSECLDR': 'ind_nifty100list.csv',
-        'NIFTY100 ENH ESG': 'ind_nifty100list.csv', 'NIFTY TATA 25 CAP': 'ind_nifty100list.csv',
-        'NIFTY MULTI MFG': 'ind_niftyindiamanufacturing_list.csv', 'NIFTY MULTI INFRA': 'ind_niftyinfralist.csv',
-        'NIFTY NEW CONSUMP': 'ind_niftyconsumptionlist.csv', 'NIFTY CORP MAATR': 'ind_nifty200list.csv',
-        'NIFTY NONCYC CONS': 'ind_niftyconsumptionlist.csv', 'NIFTY RURAL': 'ind_niftyconsumptionlist.csv',
-        'NIFTY SHARIAH 25': 'ind_nifty50list.csv', 'NIFTY50 SHARIAH': 'ind_nifty50list.csv',
-        'NIFTY500 SHARIAH': 'ind_nifty500list.csv', 'NIFTY SME EMERGE': 'ind_niftysmallcap100list.csv',
-        'NIFTY WAVES': 'ind_nifty500list.csv', 'NIFTYCONGLOMERATE': 'ind_niftymnclist.csv',
-        'NIFTY IPO': 'ind_niftysmallcap250list.csv',
+        # These below use parent CSV only because they have SAME constituents, different weights
+        # NSE library will give exact count above; CSV is used only as fallback
+        'NIFTY100 LIQ 15': None, 'NIFTY MID LIQ 15': None,  # 15 stocks - NSE lib handles
+        'NIFTY100 ESG': None, 'NIFTY100ESGSECLDR': None, 'NIFTY100 ENH ESG': None,
+        'NIFTY TATA 25 CAP': None,  # 25 stocks - NSE lib handles
+        'NIFTY MULTI MFG': None, 'NIFTY MULTI INFRA': None,
+        'NIFTY NEW CONSUMP': None, 'NIFTY CORP MAATR': None,
+        'NIFTY NONCYC CONS': None, 'NIFTY RURAL': None,
+        'NIFTY SHARIAH 25': None, 'NIFTY50 SHARIAH': None, 'NIFTY500 SHARIAH': None,
+        'NIFTY SME EMERGE': None,
+        'NIFTY WAVES': None, 'NIFTYCONGLOMERATE': None,
+        'NIFTY IPO': None,  # 50 stocks - NSE lib handles, not 250
+        'NIFTY FPI 150': None, 'NIFTY500 LMS EQL': None, 'NIFTY500 MULTICAP': None,
         # Indices with no CSV available - NSE lib handles these
         'NIFTY CHEMICALS': None, 'NIFTY EV': None, 'NIFTY HOUSING': None,
         'NIFTY CAPITAL MKT': None, 'NIFTY IND DIGITAL': None, 'NIFTY MS FIN SERV': None,
@@ -1269,7 +1272,7 @@ def api_index_stocks():
     }
 
     csv_file = NSE_CSV.get(idx)
-    if csv_file:
+    if csv_file:  # None means "no valid CSV — use NSE lib or fallback only"
         try:
             import csv as _csv, io as _io
             import requests as _rq2
