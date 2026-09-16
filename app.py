@@ -1778,6 +1778,30 @@ def api_screener_status():
     prog['cookies_ok'] = _screener_cookies_valid()
     return jsonify(prog)
 
+@app.route('/api/screener/set_cookies', methods=['POST'])
+def api_screener_set_cookies():
+    """Update screener.in cookies from frontend"""
+    import screener_scraper as _ss
+    data = request.get_json(silent=True) or {}
+    csrftoken = (data.get('csrftoken') or '').strip()
+    sessionid = (data.get('sessionid') or '').strip()
+    if not csrftoken or not sessionid:
+        return jsonify({'error': 'csrftoken aur sessionid dono chahiye'}), 400
+    # Update in-memory
+    _ss.COOKIES['csrftoken'] = csrftoken
+    _ss.COOKIES['sessionid'] = sessionid
+    _ss.SESSION.cookies.update({'csrftoken': csrftoken, 'sessionid': sessionid})
+    # Save to file
+    try:
+        cookie_file = os.path.join(BASE, 'screener_cookies.json')
+        with open(cookie_file, 'w') as f:
+            json.dump({'csrftoken': csrftoken, 'sessionid': sessionid}, f)
+    except: pass
+    # Test
+    ok = _screener_cookies_valid()
+    return jsonify({'ok': ok, 'message': 'Cookies saved!' if ok else 'Cookies saved but test failed — check values'})
+
+
 @app.route('/api/screener/results')
 def api_screener_results():
     """Return cached screener results (swing/positional/longterm)"""

@@ -10,8 +10,8 @@ from bs4 import BeautifulSoup
 
 # ── COOKIES ───────────────────────────────────────────────────────────────────
 COOKIES = {
-    'csrftoken': 'cpbc8YWupQ9GW6MpSTd46mbz7p4MNX3b',
-    'sessionid': 'gbt9m8dzpgseo1qwzxdf2loz2zrmxzxq',
+    'csrftoken': 'VNEdj3RKaRYcTivPnmhTQtI5zEAaPqlt',
+    'sessionid': '4m2inxgxovss7yrqutr3t1u08cd1vqpk',
 }
 
 # ── AAPKE SAVED SCREENS ───────────────────────────────────────────────────────
@@ -62,6 +62,7 @@ SESSION.cookies.update(COOKIES)
 # ── COLUMN MAP: screener header → our key ────────────────────────────────────
 COL_MAP = {
     'name':                  'name',
+    'company':               'name',
     'cmp':                   'current_price',
     'current price':         'current_price',
     'mar cap':               'market_cap',
@@ -260,9 +261,17 @@ def _fetch_page(base_url, page=1):
         if not table:
             return [], total
 
+        # Screener.in puts <th> inside first <tr> (no separate <thead>)
+        all_rows = table.select('tr')
+        if not all_rows:
+            return [], total
+
+        # First row = headers (all <th>)
+        header_row = all_rows[0]
         headers = []
-        for th in table.select('th'):
-            raw  = th.get_text(separator=' ', strip=True)
+        for th in header_row.select('th'):
+            tooltip = th.get('data-tooltip', '')
+            raw  = tooltip if tooltip else th.get_text(separator=' ', strip=True)
             norm = _normalize_header(raw)
             matched = None
             for col_key, our_key in COL_MAP.items():
@@ -271,8 +280,11 @@ def _fetch_page(base_url, page=1):
                     break
             headers.append(matched or norm)
 
+        # Remaining rows = data
+        data_rows = all_rows[1:]
+
         stocks = []
-        for tr in table.select('tr'):
+        for tr in data_rows:
             tds = tr.select('td')
             if not tds:
                 continue
@@ -281,7 +293,7 @@ def _fetch_page(base_url, page=1):
                 if i >= len(headers):
                     break
                 key = headers[i]
-                if not key or key in ('s.no.', 'sno'):
+                if not key or key in ('s.no.', 'sno', 's.no'):
                     continue
                 if key == 'name':
                     a = td.select_one('a')
