@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+build/
+dist/
+*.spec
+screener_results.json
+upstox_instruments.json
+upstox_token.json
+.secret_key
+userdata_*.json
+users.json
+nse_oc_cookies.json
+screener_cookies.json
