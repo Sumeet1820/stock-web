@@ -1192,13 +1192,13 @@ def api_index_stocks():
         'NIFTY MIDCAP 50':    'ind_niftymidcap50list.csv',
         'NIFTY MIDCAP 100':   'ind_niftymidcap100list.csv',
         'NIFTY MIDCAP 150':   'ind_niftymidcap150list.csv',
-        'NIFTY SMLCAP 50':    'ind_niftysmlcap50list.csv',
-        'NIFTY SMLCAP 100':   'ind_niftysmlcap100list.csv',
-        'NIFTY SMLCAP 250':   'ind_niftysmlcap250list.csv',
+        'NIFTY SMLCAP 50':    'ind_niftysmallcap50list.csv',
+        'NIFTY SMLCAP 100':   'ind_niftysmallcap100list.csv',
+        'NIFTY SMLCAP 250':   'ind_niftysmallcap250list.csv',
         'NIFTY MIDSML 400':   'ind_niftymidsmallcap400list.csv',
         'NIFTY MICROCAP250':  'ind_niftymicrocap250_list.csv',
-        'NIFTY LARGEMID250':  'ind_niftylargemid250list.csv',
-        'NIFTY MID SELECT':   'ind_niftymidselect.csv',
+        'NIFTY LARGEMID250':  'ind_niftylargemidcap250list.csv',
+        'NIFTY MID SELECT':   'ind_niftymidcapselect_list.csv',
         # Weight/factor variants — same constituents as parent
         'NIFTY500 MULTICAP':  'ind_nifty500list.csv',        # NIFTY 500 constituents
         'NIFTY500 LMS EQL':   'ind_nifty500list.csv',        # NIFTY 500 constituents
@@ -1213,17 +1213,17 @@ def api_index_stocks():
         'NIFTY REALTY':       'ind_niftyrealtylist.csv',
         'NIFTY PSU BANK':     'ind_niftypsubanklist.csv',
         'NIFTY FIN SERVICE':  'ind_niftyfinancelist.csv',
-        'NIFTY FINSRV25 50':  'ind_niftyfinancialservices2550list.csv',
+        'NIFTY FINSRV25 50':  'ind_niftyfinancialservices25_50list.csv',
         'NIFTY MEDIA':        'ind_niftymedialist.csv',
         'NIFTY OIL AND GAS':  'ind_niftyoilgaslist.csv',
         'NIFTY HEALTHCARE':   'ind_niftyhealthcarelist.csv',
-        'NIFTY CONSR DURBL':  'ind_niftyconsumerdurablelist.csv',
+        'NIFTY CONSR DURBL':  'ind_niftyconsumptionlist.csv',
         'NIFTY PVT BANK':     'ind_nifty_privatebanklist.csv',
-        'NIFTY CHEMICALS':    'ind_niftychemicalslist.csv',
-        'NIFTY MIDSML HLTH':  'ind_niftymidsmallhealthcarelist.csv',
-        'NIFTY MS IT TELCM':  'ind_niftymidsmallittelecommunicationlist.csv',
-        'NIFTY MS FIN SERV':  'ind_niftymidsmallfinancialserviceslist.csv',
-        'NIFTY FINSEREXBNK':  'ind_niftyfinancialservicesexbankinglist.csv',
+        'NIFTY CHEMICALS':    'ind_nifty500list.csv',
+        'NIFTY MIDSML HLTH':  'ind_niftymidsmallhealthcare_list.csv',
+        'NIFTY MS IT TELCM':  'ind_niftyitlist.csv',
+        'NIFTY MS FIN SERV':  'ind_niftyfinancelist.csv',
+        'NIFTY FINSEREXBNK':  'ind_niftyfinancelist.csv',
         'NIFTY500 HEALTH':    'ind_niftyhealthcarelist.csv',  # healthcare proxy
         # ── Thematic ────────────────────────────────────────────────────────────
         'NIFTY COMMODITIES':  'ind_niftycommoditieslist.csv',
@@ -1233,18 +1233,18 @@ def api_index_stocks():
         'NIFTY INFRA':        'ind_niftyinfralist.csv',
         'NIFTY MNC':          'ind_niftymnclist.csv',
         'NIFTY PSE':          'ind_niftypselist.csv',
-        'NIFTY SERV SECTOR':  'ind_niftyservicesectorlist.csv',
-        'NIFTY INDIA MFG':    'ind_niftyindiamfglist.csv',
-        'NIFTY IND DIGITAL':  'ind_niftyindigitallist.csv',
-        'NIFTY IND DEFENCE':  'ind_niftyindiadefencelist.csv',
-        'NIFTY CAPITAL MKT':  'ind_niftyCapitalMarkets.csv',
-        'NIFTY HOUSING':      'ind_niftyhousinglist.csv',
-        'NIFTY MOBILITY':     'ind_niftymobilitylist.csv',
-        'NIFTY TRANS LOGIS':  'ind_niftytransportlogisticslist.csv',
-        'NIFTY RAILWAYSPSU':  'ind_niftyrailwaypsulist.csv',
-        'NIFTY IND TOURISM':  'ind_niftyindiatourismlist.csv',
-        'NIFTY EV':           'ind_niftyev_andnewageautomotivelist.csv',
-        'NIFTY COREHOUSING':  'ind_niftycorehousinglist.csv',
+        'NIFTY SERV SECTOR':  'ind_nifty200list.csv',
+        'NIFTY INDIA MFG':    'ind_niftyindiamanufacturing_list.csv',
+        'NIFTY IND DIGITAL':  'ind_niftyitlist.csv',
+        'NIFTY IND DEFENCE':  'ind_niftyindiadefence_list.csv',
+        'NIFTY CAPITAL MKT':  'ind_nifty500list.csv',
+        'NIFTY HOUSING':      'ind_niftyrealtylist.csv',
+        'NIFTY MOBILITY':     'ind_niftymobility_list.csv',
+        'NIFTY TRANS LOGIS':  'ind_niftyinfralist.csv',
+        'NIFTY RAILWAYSPSU':  'ind_niftycpselist.csv',
+        'NIFTY IND TOURISM':  'ind_niftyindiatourism_list.csv',
+        'NIFTY EV':           'ind_niftyautolist.csv',
+        'NIFTY COREHOUSING':  'ind_niftycorehousing_list.csv',
         'NIFTY MS IND CONS':  'ind_niftymidsmallindiaconsumption_list.csv',
         'NIFTY M150 QLTY50':  'ind_niftymidcap150quality50list.csv',
         # Thematic with no dedicated CSV → use parent/related index
@@ -1254,7 +1254,7 @@ def api_index_stocks():
         'NIFTY100ESGSECLDR':  'ind_nifty100list.csv',
         'NIFTY100 ENH ESG':   'ind_nifty100list.csv',
         'NIFTY TATA 25 CAP':  'ind_nifty100list.csv',        # tata group stocks from nifty100
-        'NIFTY MULTI MFG':    'ind_niftyindiamfglist.csv',
+        'NIFTY MULTI MFG':    'ind_niftyindiamanufacturing_list.csv',
         'NIFTY MULTI INFRA':  'ind_niftyinfralist.csv',
         'NIFTY NEW CONSUMP':  'ind_niftyconsumptionlist.csv',
         'NIFTY CORP MAATR':   'ind_nifty200list.csv',        # top 200
@@ -1263,12 +1263,12 @@ def api_index_stocks():
         'NIFTY SHARIAH 25':   'ind_nifty50list.csv',         # shariah compliant from nifty50
         'NIFTY50 SHARIAH':    'ind_nifty50list.csv',
         'NIFTY500 SHARIAH':   'ind_nifty500list.csv',
-        'NIFTY SME EMERGE':   'ind_niftysmlcap100list.csv',  # small/mid proxy
-        'NIFTY INTERNET':     'ind_niftyindigitallist.csv',
+        'NIFTY SME EMERGE':   'ind_niftysmallcap100list.csv',  # small/mid proxy
+        'NIFTY INTERNET':     'ind_niftyitlist.csv',
         'NIFTY WAVES':        'ind_nifty500list.csv',        # broad market
-        'NIFTY INFRALOG':     'ind_niftytransportlogisticslist.csv',
+        'NIFTY INFRALOG':     'ind_niftyinfralist.csv',
         'NIFTYCONGLOMERATE':  'ind_niftymnclist.csv',        # conglomerates proxy
-        'NIFTY IPO':          'ind_niftysmlcap250list.csv',  # recent IPOs proxy
+        'NIFTY IPO':          'ind_niftysmallcap250list.csv',  # recent IPOs proxy
         # ── Strategy ────────────────────────────────────────────────────────────
         # Strategy indices: same stocks as parent, selected by factor
         'NIFTY DIV OPPS 50':  'ind_nifty500list.csv',        # dividend stocks from 500
@@ -1285,14 +1285,14 @@ def api_index_stocks():
         'NIFTY200 ALPHA 30':  'ind_nifty200list.csv',
         'NIFTY500MOMENTM50':  'ind_nifty500list.csv',
         'NIFTYMS400 MQ 100':  'ind_niftymidsmallcap400list.csv',
-        'NIFTYSML250MQ 100':  'ind_niftysmlcap250list.csv',
+        'NIFTYSML250MQ 100':  'ind_niftysmallcap250list.csv',
         'NIFTY TOP 10 EW':    'ind_nifty50list.csv',
         'NIFTY AQL 30':       'ind_nifty500list.csv',
         'NIFTY AQLV 30':      'ind_nifty500list.csv',
         'NIFTY HIGHBETA 50':  'ind_nifty500list.csv',
         'NIFTY LOW VOL 50':   'ind_nifty500list.csv',
         'NIFTY QLTY LV 30':   'ind_nifty500list.csv',
-        'NIFTY SML250 Q50':   'ind_niftysmlcap250list.csv',
+        'NIFTY SML250 Q50':   'ind_niftysmallcap250list.csv',
         'NIFTY TOP 15 EW':    'ind_nifty100list.csv',
         'NIFTY100 ALPHA 30':  'ind_nifty100list.csv',
         'NIFTY200 VALUE 30':  'ind_nifty200list.csv',
