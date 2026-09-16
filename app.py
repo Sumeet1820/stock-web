@@ -1071,63 +1071,84 @@ def _fetch_market_data_new(dtype):
 
     # ── VOLUME / ACTIVE / 52HIGH / 52LOW ─────────────────────────────────────
     # Use NIFTY 500 index constituents and sort by relevant metric
-    page_map2 = {
-        'volume':  'https://www.nseindia.com/market-data/volume-gainers-spurts',
-        'active':  'https://www.nseindia.com/market-data/most-active-equities',
-        '52high':  'https://www.nseindia.com/market-data/52-week-high-equity-market',
-        '52low':   'https://www.nseindia.com/market-data/52-week-low-equity-market',
-    }
+    raw_items = []
+
+    # 1. Try NSE library (most reliable)
     try:
-        NSE_SESSION.get(page_map2.get(dtype, 'https://www.nseindia.com'), timeout=8)
-        r = NSE_SESSION.get(
-            "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20500",
-            timeout=15)
-        if r.status_code != 200: return []
-        raw_items = r.json().get('data', [])
-        rows = []
-        for item in raw_items:
-            sym = (item.get('symbol') or '').strip()
-            if not sym or sym == 'NIFTY 500': continue
-            ltp  = _safe_float(item.get('lastPrice'))
-            prev = _safe_float(item.get('previousClose'))
-            chg  = _safe_float(item.get('pChange')) or _pct(ltp, prev)
-            vol  = _safe_float(item.get('totalTradedVolume')) or 0
-            high52 = _safe_float(item.get('yearHigh'))
-            low52  = _safe_float(item.get('yearLow'))
-            rows.append({
-                'symbol':     sym,
-                'company':    item.get('meta', {}).get('companyName', sym) if isinstance(item.get('meta'), dict) else sym,
-                'ltp':        ltp or 0,
-                'change_pct': chg or 0,
-                'volume':     vol,
-                'high52':     high52,
-                'low52':      low52,
-            })
-
-        if dtype == 'volume':
-            rows.sort(key=lambda x: x['volume'], reverse=True)
-        elif dtype == 'active':
-            rows.sort(key=lambda x: abs(x['change_pct']), reverse=True)
-        elif dtype == '52high':
-            # Near 52W high — sort by proximity to 52W high
-            def near_high(r):
-                if r['high52'] and r['ltp']:
-                    return (r['ltp'] / r['high52']) * 100
-                return 0
-            rows = [r for r in rows if r['high52'] and r['ltp'] and r['ltp'] >= r['high52'] * 0.95]
-            rows.sort(key=near_high, reverse=True)
-        elif dtype == '52low':
-            def near_low(r):
-                if r['low52'] and r['ltp']:
-                    return (r['ltp'] / r['low52']) * 100
-                return 999
-            rows = [r for r in rows if r['low52'] and r['ltp'] and r['ltp'] <= r['low52'] * 1.05]
-            rows.sort(key=near_low)
-
-        return rows[:50]
+        import tempfile
+        from nse import NSE as _NSE
+        _n = _NSE(tempfile.gettempdir())
+        data = _n.listEquityStocksByIndex('NIFTY 500')
+        _n.exit()
+        if data and data.get('data'):
+            raw_items = data['data']
     except Exception as ex:
-        print(f"[market-{dtype}] {ex}")
+        print(f'[market NSE lib] {ex}')
+
+    # 2. Fallback: NSE SESSION API
+    if not raw_items:
+        try:
+            page_map2 = {
+                'volume': 'https://www.nseindia.com/market-data/volume-gainers-spurts',
+                'active': 'https://www.nseindia.com/market-data/most-active-equities',
+                '52high': 'https://www.nseindia.com/market-data/52-week-high-equity-market',
+                '52low':  'https://www.nseindia.com/market-data/52-week-low-equity-market',
+            }
+            NSE_SESSION.get(page_map2.get(dtype, 'https://www.nseindia.com'), timeout=8)
+            r = NSE_SESSION.get(
+                "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20500",
+                timeout=15)
+            if r.status_code == 200:
+                raw_items = r.json().get('data', [])
+        except Exception as ex:
+            print(f'[market NSE session] {ex}')
+
+    if not raw_items:
         return []
+
+    rows = []
+    for item in raw_items:
+        sym = (item.get('symbol') or '').strip()
+        if not sym or sym in ('NIFTY 500', 'NIFTY500'): continue
+        ltp    = _safe_float(item.get('lastPrice') or item.get('last_price') or item.get('ltp'))
+        prev   = _safe_float(item.get('previousClose') or item.get('prev_close'))
+        chg    = _safe_float(item.get('pChange') or item.get('perChange')) or _pct(ltp, prev)
+        vol    = _safe_float(item.get('totalTradedVolume') or item.get('volume')) or 0
+        high52 = _safe_float(item.get('yearHigh') or item.get('52w_high'))
+        low52  = _safe_float(item.get('yearLow')  or item.get('52w_low'))
+        comp   = sym
+        if isinstance(item.get('meta'), dict):
+            comp = item['meta'].get('companyName', sym)
+        rows.append({
+            'symbol':     sym,
+            'company':    comp,
+            'ltp':        ltp or 0,
+            'change_pct': chg or 0,
+            'volume':     vol,
+            'high52':     high52,
+            'low52':      low52,
+        })
+
+    if dtype == 'volume':
+        rows.sort(key=lambda x: x['volume'], reverse=True)
+    elif dtype == 'active':
+        rows.sort(key=lambda x: abs(x['change_pct']), reverse=True)
+    elif dtype == '52high':
+        def near_high(r):
+            if r['high52'] and r['ltp']:
+                return (r['ltp'] / r['high52']) * 100
+            return 0
+        rows = [r for r in rows if r['high52'] and r['ltp'] and r['ltp'] >= r['high52'] * 0.95]
+        rows.sort(key=near_high, reverse=True)
+    elif dtype == '52low':
+        def near_low(r):
+            if r['low52'] and r['ltp']:
+                return (r['ltp'] / r['low52']) * 100
+            return 999
+        rows = [r for r in rows if r['low52'] and r['ltp'] and r['ltp'] <= r['low52'] * 1.05]
+        rows.sort(key=near_low)
+
+    return rows[:50]
 
 @app.route('/api/indices')
 def api_indices():
