@@ -941,7 +941,8 @@ def api_returns(sym):
 @app.route('/api/live/<sym>')
 def api_live(sym):
     sym = sym.upper()
-    # Try Upstox first for live LTP (faster + more accurate)
+
+    # ── 1. Upstox full market quote (has ltp + prev close → change calc) ─────
     if _upstox_token:
         try:
             import requests as _rq
@@ -949,20 +950,56 @@ def api_live(sym):
             if ikey:
                 ikey_enc = ikey.replace('|','%7C').replace(' ','%20')
                 r = _rq.get(
-                    f'https://api.upstox.com/v2/market-quote/ltp?instrument_key={ikey_enc}',
-                    headers=_upstox_headers(), timeout=5)
+                    f'https://api.upstox.com/v2/market-quote/quotes?instrument_key={ikey_enc}',
+                    headers=_upstox_headers(), timeout=8)
                 if r.status_code == 200:
                     qd = r.json().get('data', {})
                     if qd:
                         v = list(qd.values())[0]
-                        ltp = v.get('last_price', 0) or v.get('ltp', 0)
+                        ltp   = float(v.get('last_price', 0) or 0)
+                        ohlc  = v.get('ohlc', {}) or {}
+                        prev  = float(ohlc.get('close', 0) or 0)
+                        chg   = round(ltp - prev, 2) if prev else 0.0
+                        chg_p = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
                         if ltp:
-                            return jsonify({'ltp': ltp, 'symbol': sym, 'source': 'upstox'})
+                            return jsonify({
+                                'ltp': ltp, 'change': chg, 'change_pct': chg_p,
+                                'symbol': sym, 'source': 'upstox',
+                                'high': float(ohlc.get('high', 0) or 0),
+                                'low':  float(ohlc.get('low',  0) or 0),
+                                'open': float(ohlc.get('open', 0) or 0),
+                            })
         except Exception as ex:
             print(f'[Upstox live] {sym}: {ex}')
-    # Fallback to NSE
-    try: return jsonify(fetch_nse_live(sym))
-    except Exception as e: return jsonify({'error':str(e)}),500
+
+    # ── 2. NSE fallback ───────────────────────────────────────────────────────
+    try:
+        data = fetch_nse_live(sym)
+        if data and data.get('ltp'):
+            return jsonify(data)
+    except: pass
+
+    # ── 3. yfinance fallback (always works) ───────────────────────────────────
+    try:
+        import yfinance as yf
+        idx_map = {'NIFTY':'^NSEI','BANKNIFTY':'^NSEBANK','FINNIFTY':'NIFTY_FIN_SERVICE.NS','SENSEX':'^BSESN'}
+        yf_sym = idx_map.get(sym, f'{sym}.NS')
+        t = yf.Ticker(yf_sym)
+        hist = t.history(period='2d', interval='1d', auto_adjust=True)
+        if hist is not None and not hist.empty:
+            ltp  = round(float(hist['Close'].iloc[-1]), 2)
+            chg  = 0.0; chg_p = 0.0
+            if len(hist) >= 2:
+                prev = float(hist['Close'].iloc[-2])
+                if prev > 0:
+                    chg   = round(ltp - prev, 2)
+                    chg_p = round((ltp - prev) / prev * 100, 2)
+            return jsonify({'ltp': ltp, 'change': chg, 'change_pct': chg_p,
+                            'symbol': sym, 'source': 'yfinance'})
+    except Exception as ex:
+        print(f'[yfinance live] {sym}: {ex}')
+
+    return jsonify({'error': f'{sym} ka live price nahi mila'}), 404
 
 @app.route('/api/price/<sym>')
 def api_price(sym):
