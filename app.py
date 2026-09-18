@@ -975,7 +975,7 @@ def api_live(sym):
     # ── 2. NSE fallback ───────────────────────────────────────────────────────
     try:
         data = fetch_nse_live(sym)
-        if data and data.get('ltp'):
+        if data and data.get('ltp') and float(data.get('ltp', 0)) > 0:
             return jsonify(data)
     except: pass
 
