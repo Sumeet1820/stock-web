@@ -1381,6 +1381,13 @@ def api_chartink_list():
         {'slug':'copy-breakouts-in-short-term-5280','label':'💥 Breakout Short Term','color':'#FF9500'},
         {'slug':'badiya-vala-scanner','label':'⭐ Badiya Scanner','color':'#FFD700'},
         {'slug':'swing-scanner-20102336','label':'🔍 Swing Scanner 2','color':'#4D8EFF'},
+        # Sumeet's custom scanners
+        {'slug':'44ma-200ma-rsi55-fundamentals-weekly','label':'📊 44MA 200MA RSI55','color':'#FF9500'},
+        {'slug':'best-vcp-scanner-till-now','label':'🌀 Best VCP','color':'#9B6FE8'},
+        {'slug':'copy-perfect-vcp-by-swing-niveshak-111','label':'✨ Perfect VCP','color':'#9B6FE8'},
+        {'slug':'copy-stockexploder-baap-947','label':'💣 StockExploder Baap','color':'#FF3D5C'},
+        {'slug':'copy-44-ma-scanner-4','label':'📐 44 MA Custom','color':'#FF9500'},
+        {'slug':'copy-rsi-strong-507293','label':'💪 RSI Strong','color':'#00E6A8'},
     ])
 
 @app.route('/api/chartink/<slug>')
