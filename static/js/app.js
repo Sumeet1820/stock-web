@@ -2554,6 +2554,16 @@ function openScreenerIn() {
   else if (currentSym) window.open(`https://www.screener.in/company/${currentSym}/`, '_blank');
 }
 
+function openMoneyControl() {
+  const sym = currentSym;
+  const name = currentData?.name || '';
+  if (sym) {
+    // MoneyControl search by company name or symbol
+    const q = encodeURIComponent(name || sym);
+    window.open(`https://www.moneycontrol.com/stocks/company_info/stock_news.php?sc_did=${sym}`, '_blank');
+  }
+}
+
 function toggleConsolidated() {
   if (!currentSym) return;
   const isCons = currentData?.is_consolidated;
