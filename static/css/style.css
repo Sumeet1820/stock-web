@@ -1546,3 +1546,9 @@ body {
   .id-sl-tgt-grid, .id-reasons-grid, .pcr-hero, .pcr-tables { grid-template-columns: 1fr; }
   .id-metrics-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+
+/* ── Fixes: long company names, trade table on small screens ── */
+.co-ellipsis { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 600px) { .co-ellipsis { max-width: 130px; } }
+.trade-log-table th, .trade-log-table td { white-space: nowrap; }
