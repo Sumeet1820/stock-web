@@ -275,7 +275,8 @@ async function loadIndices() {
       const chg = parseFloat(r.chg) || 0;
       const cls   = chg >= 0 ? 'idx-up' : 'idx-down';
       const arrow = chg >= 0 ? '▲' : '▼';
-      const disp  = r.name.replace(/^NIFTY\s*/i,'').substring(0, 14);
+      let disp  = r.name.replace(/^NIFTY\s*/i,'').substring(0, 14);
+      if (/^\d+$/.test(disp)) disp = 'NIFTY ' + disp;
       return `<div class="index-card" onclick="loadIndexStocksFromRp('${escHTML(r.name)}')">
         <div class="idx-name">${escHTML(disp)}</div>
         <div class="idx-val">${fmtNum(r.last)}</div>
@@ -1227,7 +1228,7 @@ function renderTradeLog() {
             <td colspan="4" style="font-weight:700;color:var(--text)">📊 TOTAL</td>
             <td style="color:var(--accent);font-weight:700">₹${fmtNum(totalInvested)}</td>
             <td></td>
-            <td style="color:var(--subtext);font-size:11px">Current Value:</td>
+            <td style="color:var(--subtext);font-size:11px">Today (total):</td>
             <td id="tl-total-today" style="font-weight:700;color:var(--subtext)">...</td>
             <td id="tl-total-pnl" style="font-weight:700;color:var(--subtext)">...</td>
             <td id="tl-total-pct" style="font-weight:700;color:var(--subtext)">...</td>
@@ -1583,8 +1584,9 @@ async function fetchTlPnl(trade, idx) {
       const r1 = await fetch(`/api/live/${trade.sym}`);
       const d1 = await r1.json();
       ltp      = parseFloat(d1.ltp)        || 0;
-      todayChg = parseFloat(d1.change)     || null;
-      todayPct = parseFloat(d1.change_pct) || null;
+      const _c = parseFloat(d1.change), _p = parseFloat(d1.change_pct);
+      todayChg = Number.isFinite(_c) ? _c : null;   // 0 bhi valid value hai
+      todayPct = Number.isFinite(_p) ? _p : null;
     } catch {}
 
     // Fallback: yfinance price (no today's change available)
@@ -1805,11 +1807,11 @@ async function runScreener(slug) {
                 const chg   = parseFloat(r.per_chg || r.change_pct || 0);
                 const cls   = chg >= 0 ? 'up-col' : 'dn-col';
                 const arrow2 = chg >= 0 ? '▲' : '▼';
-                const co    = (r.company || r.name || '').substring(0, 22);
+                const co    = (r.company || r.name || '');
                 return `<tr onclick="quickLoad('${escHTML(r.symbol)}')">
                   <td style="color:var(--subtext)">${i+1}</td>
                   <td class="sym-col">${escHTML(r.symbol)}</td>
-                  <td style="color:var(--subtext);font-size:12px">${escHTML(co)}</td>
+                  <td class="co-ellipsis" title="${escHTML(co)}" style="color:var(--subtext);font-size:12px">${escHTML(co)}</td>
                   <td>₹${fmtNum(r.ltp || r.close || 0)}</td>
                   <td class="${cls}" style="font-weight:700">${arrow2} ${Math.abs(chg).toFixed(2)}%</td>
                   <td style="color:var(--subtext)">${fmtVol(r.volume || r.vol || 0)}</td>
@@ -1877,11 +1879,11 @@ function runScreenerSort(slug, key, dir) {
             const chg    = parseFloat(r.per_chg || r.change_pct || 0);
             const cls    = chg >= 0 ? 'up-col' : 'dn-col';
             const arr2   = chg >= 0 ? '▲' : '▼';
-            const co     = (r.company || r.name || '').substring(0, 22);
+            const co     = (r.company || r.name || '');
             return `<tr onclick="quickLoad('${escHTML(r.symbol)}')">
               <td style="color:var(--subtext)">${i+1}</td>
               <td class="sym-col">${escHTML(r.symbol)}</td>
-              <td style="color:var(--subtext);font-size:12px">${escHTML(co)}</td>
+              <td class="co-ellipsis" title="${escHTML(co)}" style="color:var(--subtext);font-size:12px">${escHTML(co)}</td>
               <td>₹${fmtNum(r.ltp || r.close || 0)}</td>
               <td class="${cls}" style="font-weight:700">${arr2} ${Math.abs(chg).toFixed(2)}%</td>
               <td style="color:var(--subtext)">${fmtVol(r.volume || r.vol || 0)}</td>
@@ -2243,10 +2245,11 @@ function renderIndexHeatmap(cat, rows, cont) {
       ${sorted.map(r => {
         const chg = parseFloat(r.chg) || 0;
         const bg  = heatmapColor(chg);
-        const disp = r.name.replace(/^NIFTY\s*/i,'').replace(/\s*INDEX$/i,'').substring(0,16);
+        let disp = r.name.replace(/^NIFTY\s*/i,'').replace(/\s*INDEX$/i,'').substring(0,16);
+        if (/^\d+$/.test(disp)) disp = 'NIFTY ' + disp;   // '50' → 'NIFTY 50'
         return `<div class="heatmap-tile" style="background:${bg}" onclick="loadIndexStocks('${escHTML(r.name)}')">
           <div class="ht-name">${escHTML(disp)}</div>
-          <div class="ht-val">${r.last ? '₹'+fmtNum(r.last) : ''}</div>
+          <div class="ht-val">${r.last ? fmtNum(r.last) : ''}</div>
           <div class="ht-chg">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</div>
         </div>`;
       }).join('')}
