@@ -1230,6 +1230,37 @@ def _get_prices_upstox(syms):
         print(f'[_get_prices_upstox] {ex}')
         return [{'symbol': s, 'ltp': 0, 'chg': 0.0} for s in syms]
 
+@app.route('/api/debug-index')
+def api_debug_index():
+    """Debug: har source ko alag chalao. Use: /api/debug-index?index=NIFTY REALTY"""
+    import traceback, tempfile
+    from urllib.parse import quote as _q
+    idx = request.args.get('index', 'NIFTY REALTY').strip()
+    out = {'index': idx}
+    # 1. nse library
+    try:
+        from nse import NSE as _NSE
+        _n = _NSE(tempfile.gettempdir())
+        d = _n.listEquityStocksByIndex(idx); _n.exit()
+        items = (d or {}).get('data', [])
+        out['nse_lib'] = {'count': len(items), 'first_2_raw': items[:2]}
+    except Exception as e:
+        out['nse_lib'] = {'error': repr(e)}
+    # 2. NSE direct
+    try:
+        NSE_SESSION.get('https://www.nseindia.com/market-data/live-equity-market', timeout=8)
+        r = NSE_SESSION.get('https://www.nseindia.com/api/equity-stockIndices?index=' + _q(idx), timeout=15)
+        try:    js = r.json()
+        except: js = {}
+        items = js.get('data', []) if isinstance(js, dict) else []
+        out['nse_direct'] = {'http': r.status_code, 'count': len(items),
+                             'first_2_raw': items[:2], 'body_head': r.text[:200] if not items else ''}
+    except Exception as e:
+        out['nse_direct'] = {'error': repr(e)}
+    # 3. Upstox token / instruments status
+    out['upstox'] = {'token_set': bool(_upstox_token), 'instruments': len(_upstox_instruments)}
+    return jsonify(out)
+
 @app.route('/api/index-stocks')
 def api_index_stocks():
     idx = request.args.get('index', '').strip()
