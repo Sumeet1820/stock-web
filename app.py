@@ -2843,6 +2843,9 @@ if os.environ.get('RENDER_EXTERNAL_URL'):
     threading.Thread(target=_keep_alive, daemon=True).start()
     print("🔄 Keep-alive thread started")
 
+from events_module import register_events
+register_events(app, NSE_SESSION, _login_required, _user_data)     
+
 if __name__=='__main__':
     print("🚀 Stock Analyzer Pro Web — http://localhost:5000")
     app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
