@@ -1,4 +1,4 @@
-﻿// ══ Intraday & Options JS ══
+// ══ Intraday & Options JS ══
 let _idSym = 'NIFTY', _idTf = '15m';
 let _ocSym = 'NIFTY', _pcrSym = 'NIFTY';
 let _autoTimer = null;
@@ -246,6 +246,13 @@ function renderHedgeAdvisor(d) {
   else if (score <= 45 && (stSig === 'SELL' || macd === 'Bearish')) bias = 'bear';
   else bias = 'neutral';
 
+  // RSI guard: overbought/oversold me 'STRONG' signal mat do (chase karna risky hai)
+  let rsiWarn = '';
+  if (bias === 'strong_bull' && rsi >= 75) { bias = 'bull'; rsiWarn = `RSI ${rsi} overbought — naya CALL lene me jaldi mat karo, pullback ka wait karo`; }
+  else if (bias === 'strong_bear' && rsi <= 25) { bias = 'bear'; rsiWarn = `RSI ${rsi} oversold — naya PUT lene me jaldi mat karo, bounce ho sakta hai`; }
+  else if (bias === 'bull' && rsi >= 75) { rsiWarn = `RSI ${rsi} overbought — reversal risk`; }
+  else if (bias === 'bear' && rsi <= 25) { rsiWarn = `RSI ${rsi} oversold — bounce risk`; }
+
   // ── Strike suggestions (ATM ± 1 step) ─────────────────────────────────────
   // Round to nearest 50 for indices, 10/20/50 for stocks
   const step = cur > 20000 ? 50 : cur > 5000 ? 100 : cur > 1000 ? 50 : cur > 500 ? 20 : 10;
@@ -412,6 +419,7 @@ function renderHedgeAdvisor(d) {
     strong_bear: { text: '🔴 STRONG BEARISH',   col: 'var(--red)' },
   };
   const bl = biasLabels[bias] || biasLabels.neutral;
+  const warnHtml = rsiWarn ? `<div style="padding:8px 16px;font-size:12px;color:var(--yellow);background:rgba(255,200,0,0.08);border-bottom:1px solid var(--border)">⚠️ ${escHTML(rsiWarn)}</div>` : '';
 
   const cards = strategies.map(s => `
     <div style="background:${s.bg};border:1px solid ${s.border};border-radius:10px;padding:14px;flex:1;min-width:260px">
@@ -441,6 +449,7 @@ function renderHedgeAdvisor(d) {
         </div>
         <div style="margin-left:auto;font-weight:700;color:${bl.col};font-size:13px">${bl.text}</div>
       </div>
+      ${warnHtml}
       <div style="padding:14px;display:flex;gap:12px;flex-wrap:wrap">
         ${cards}
       </div>
