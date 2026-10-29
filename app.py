@@ -1192,6 +1192,27 @@ def api_indices():
     try: return jsonify(_fetch_all_indices())
     except Exception as e: return jsonify({'error':str(e)}),500
 
+def _upstox_prev_close_map(ikeys):
+    """{SYMBOL: previous trading day close} — Upstox v3 OHLC (prev_ohlc.close)."""
+    import requests as _rq
+    out = {}
+    for i in range(0, len(ikeys), 100):
+        batch = ikeys[i:i+100]
+        ke = ','.join(k for _, k in batch).replace('|', '%7C').replace(' ', '%20')
+        try:
+            r = _rq.get(f'https://api.upstox.com/v3/market-quote/ohlc?instrument_key={ke}&interval=1d',
+                        headers=_upstox_headers(), timeout=12)
+            if r.status_code == 200:
+                for k, v in (r.json().get('data') or {}).items():
+                    sp = k.split(':')[-1].split('|')[-1].upper()
+                    pc = float((v.get('prev_ohlc') or {}).get('close') or 0)
+                    if pc > 0: out[sp] = pc
+            else:
+                print(f'[prev_close] HTTP {r.status_code}: {r.text[:200]}')
+        except Exception as ex:
+            print(f'[prev_close] {ex}')
+    return out
+
 def _get_prices_upstox(syms):
     """Batch fetch live prices from Upstox. Always returns all symbols (ltp=0 if unavailable)."""
     if not _upstox_token or not _upstox_instruments:
@@ -1220,8 +1241,22 @@ def _get_prices_upstox(syms):
                         ltp  = float(v.get('last_price', 0) or 0)
                         prev = float((v.get('ohlc') or {}).get('close', 0) or 0)
                         lmap[sp] = ltp
-                        cmap[sp] = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
+                        chg_p = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
+                        if abs(chg_p) < 1e-9 and ltp:   # close ke baad ohlc.close = aaj ka close
+                            try: nc = float(v.get('net_change', 0) or 0)
+                            except: nc = 0.0
+                            if nc and (ltp - nc) > 0:
+                                chg_p = round(nc / (ltp - nc) * 100, 2)
+                        cmap[sp] = chg_p
             except: pass
+
+        # Abhi bhi 0 ho to Upstox v3 ka prev_ohlc.close (pichle din ki close) use karo
+        zero = [(s, k) for s, k in ikeys if abs(cmap.get(s, 0.0)) < 1e-9 and lmap.get(s)]
+        if zero:
+            pcm = _upstox_prev_close_map(zero)
+            for s, _k in zero:
+                pc = pcm.get(s)
+                if pc: cmap[s] = round((lmap[s] - pc) / pc * 100, 2)
 
         # Always return ALL symbols — ltp=0 if price not available
         return [{'symbol': s, 'ltp': round(lmap.get(s, 0), 2), 'chg': cmap.get(s, 0.0)}
@@ -1240,6 +1275,7 @@ def api_debug_index():
     # 1. nse library
     try:
         from nse import NSE as _NSE
+        out['nse_lib_methods'] = [m for m in dir(_NSE) if not m.startswith('_')]
         _n = _NSE(tempfile.gettempdir())
         d = _n.listEquityStocksByIndex(idx); _n.exit()
         items = (d or {}).get('data', [])
@@ -1259,6 +1295,12 @@ def api_debug_index():
         out['nse_direct'] = {'error': repr(e)}
     # 3. Upstox token / instruments status
     out['upstox'] = {'token_set': bool(_upstox_token), 'instruments': len(_upstox_instruments)}
+    try:
+        t = [(x, _upstox_instruments.get(x)) for x in ('DLF', 'LODHA') if _upstox_instruments.get(x)]
+        out['upstox']['prev_close_test'] = _upstox_prev_close_map(t)
+        out['upstox']['prices_test'] = _get_prices_upstox(['DLF', 'LODHA'])
+    except Exception as e:
+        out['upstox']['test_error'] = repr(e)
     return jsonify(out)
 
 @app.route('/api/index-stocks')
