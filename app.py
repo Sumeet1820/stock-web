@@ -1264,26 +1264,29 @@ def api_index_stocks():
         return jsonify([])
 
     # ── 1. NSE Library (most accurate — same data as nseindia.com heatmap) ────────
+        # ── 1b. NSE direct API (NSE_SESSION) — pChange market close ke baad bhi sahi ──
     try:
-        import tempfile
-        from nse import NSE as _NSE
-        _n = _NSE(tempfile.gettempdir())
-        data = _n.listEquityStocksByIndex(idx)
-        _n.exit()
-        if data and data.get('data'):
+        NSE_SESSION.get('https://www.nseindia.com/market-data/live-equity-market', timeout=8)
+        r = NSE_SESSION.get(
+            'https://www.nseindia.com/api/equity-stockIndices?index=' + urllib.parse.quote(idx),
+            timeout=15)
+        if r.status_code == 200:
             rows = []
-            for item in data['data']:
-                sym = (item.get('symbol') or item.get('meta', {}).get('symbol') or '').strip()
-                if not sym or sym == idx: continue
-                try:    ltp = float(item.get('lastPrice', 0) or 0)
-                except: ltp = 0.0
-                try:    chg = float(item.get('pChange', item.get('percentChange', 0)) or 0)
-                except: chg = 0.0
-                rows.append({'symbol': sym, 'ltp': round(ltp, 2), 'chg': round(chg, 2)})
+            for item in r.json().get('data', []):
+                sym = (item.get('symbol') or '').strip()
+                if not sym or sym.upper() == idx.upper() or item.get('priority') == 1:
+                    continue   # pehli row index khud hoti hai
+                ltp = _safe_float(item.get('lastPrice')) or 0.0
+                chg = _safe_float(item.get('pChange'))
+                if chg is None:
+                    chg = _pct(ltp, _safe_float(item.get('previousClose')))
+                rows.append({'symbol': sym, 'ltp': round(ltp, 2), 'chg': round(chg or 0.0, 2)})
             if rows:
                 return jsonify(rows)
+        else:
+            print(f'[NSE direct] {idx}: HTTP {r.status_code}')
     except Exception as ex:
-        print(f'[NSE lib] {idx}: {ex}')
+        print(f'[NSE direct] {idx}: {ex}')
     NSE_CSV = {
         'NIFTY 50': 'ind_nifty50list.csv', 'NIFTY NEXT 50': 'ind_niftynext50list.csv',
         'NIFTY 100': 'ind_nifty100list.csv', 'NIFTY 200': 'ind_nifty200list.csv',
