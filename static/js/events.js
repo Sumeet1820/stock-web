@@ -106,19 +106,24 @@
 
   window.openEventsCalendar = open;
 
-  // Sidebar me item add karo (Intraday ko clone karke)
-  window.addEventListener('load', () => {
-    const cand = [...document.querySelectorAll('a,li,div,button')].filter(el => el.children.length <= 3 && /^\s*\S*\s*Intraday\s*$/.test(el.textContent));
-    const base = cand[cand.length - 1];
+  // Sidebar me proper nav button (Intraday ke baad) — duplicate id nahi banata
+  function addNav() {
+    if (document.getElementById('nav-events')) return;
+    const base = document.getElementById('nav-intraday');
     if (base && base.parentElement) {
-      const n = base.cloneNode(true);
-      n.removeAttribute('onclick'); n.classList.remove('active');
-      n.innerHTML = n.innerHTML.replace(/Intraday/, 'Events').replace(/⚡/, '📅');
-      n.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); open(); });
-      base.parentElement.appendChild(n);
+      const b = document.createElement('button');
+      b.className = 'nav-btn'; b.id = 'nav-events';
+      b.innerHTML = '📅 <span>Events</span>';
+      b.addEventListener('click', () => {
+        const sb = document.getElementById('sidebar'); if (sb) sb.classList.remove('open');
+        const ov = document.querySelector('.sidebar-overlay'); if (ov) ov.classList.remove('show');
+        open();
+      });
+      base.insertAdjacentElement('afterend', b);
     } else {
       const b = document.createElement('button'); b.id = 'ev-float'; b.textContent = '📅 Events';
       b.onclick = open; document.body.appendChild(b);
     }
-  });
+  }
+  if (document.readyState === 'complete') addNav(); else window.addEventListener('load', addNav);
 })();
