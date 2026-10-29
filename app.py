@@ -961,6 +961,30 @@ def api_live(sym):
                         prev  = float(ohlc.get('close', 0) or 0)
                         chg   = round(ltp - prev, 2) if prev else 0.0
                         chg_p = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
+                        # Market close ke baad ohlc.close = aaj ka close ho sakta hai -> change 0 aata hai.
+                        # Pehle Upstox ka net_change try karo, phir yfinance ki pichli close se nikalo.
+                        if abs(chg) < 1e-9 and ltp:
+                            try:
+                                nc = float(v.get('net_change', 0) or 0)
+                            except Exception:
+                                nc = 0.0
+                            if nc:
+                                chg = round(nc, 2)
+                                base = ltp - nc
+                                chg_p = round(nc / base * 100, 2) if base > 0 else 0.0
+                            else:
+                                try:
+                                    import yfinance as _yf
+                                    _h = _yf.Ticker(f'{sym}.NS').history(period='5d', interval='1d', auto_adjust=False)
+                                    _c = [float(x) for x in _h['Close'].dropna().tolist()]
+                                    if len(_c) >= 2:
+                                        # last close == ltp (market band) ho to uske pehle wali close prev hai
+                                        _prev = _c[-2] if abs(_c[-1] - ltp) / max(ltp, 1) < 0.02 else _c[-1]
+                                        if _prev > 0:
+                                            chg = round(ltp - _prev, 2)
+                                            chg_p = round((ltp - _prev) / _prev * 100, 2)
+                                except Exception as _ex:
+                                    print(f'[live prev-close fallback] {sym}: {_ex}')
                         if ltp:
                             return jsonify({
                                 'ltp': ltp, 'change': chg, 'change_pct': chg_p,
@@ -1169,7 +1193,7 @@ def _fetch_market_data_new(dtype):
     if dtype == 'volume':
         rows.sort(key=lambda x: x['volume'], reverse=True)
     elif dtype == 'active':
-        rows.sort(key=lambda x: abs(x['change_pct']), reverse=True)
+        rows.sort(key=lambda x: (x['ltp'] or 0) * (x['volume'] or 0), reverse=True)   # Most Active = traded value (price x volume)
     elif dtype == '52high':
         def near_high(r):
             if r['high52'] and r['ltp']:
@@ -1579,7 +1603,7 @@ def api_news(sym):
             items = r.json() if isinstance(r.json(), list) else []
             for item in items[:5]:
                 title = (item.get('attchmntText') or item.get('desc') or '').strip()
-                date  = (item.get('an_dt') or '')[:10]
+                date  = (item.get('an_dt') or '')[:11].strip()   # 15-Oct-2026 (pura saal)
                 link  = (item.get('attchmntFile') or '').strip()
                 if not link:
                     link = f"https://www.nseindia.com/get-quotes/equity?symbol={sym}"
