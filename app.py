@@ -2,7 +2,7 @@
 Stock Analyzer Pro — Flask Web Backend
 stock_analyzer_v34.py ki saari logic ka web wrapper.
 """
-import sys, os, threading, json, datetime, re, hashlib, secrets
+import sys, os, threading, json, datetime, re, hashlib, secrets, time
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
@@ -101,44 +101,116 @@ def _evaluate_checklist(data, tab):
                 items.append({'name':name,'condition':cond,'status':'nodata','value':val,'icon':'⚠️'})
     return {'items':items,'passed':passed,'total':total,'score':round(passed/total*100) if total else 0}
 
+_daily_cache = {}
+_daily_lock = threading.Lock()
+
+def _daily_hist_cached(sym, ttl=300):
+    """5Y daily candles (ek hi source) — Day/Week/Month teeno tab isi se bante hain, taki price same rahe."""
+    now = time.time()
+    with _daily_lock:
+        c = _daily_cache.get(sym)
+        if c and now - c[0] < ttl: return c[1].copy()
+    import yfinance as yf
+    hist = yf.download(f"{sym}.NS", period='5y', interval='1d', auto_adjust=True, progress=False)
+    if hist is None or hist.empty:
+        hist = yf.Ticker(f"{sym}.NS").history(period='5y', interval='1d', auto_adjust=True, actions=False)
+    if hist is None or hist.empty: return None
+    if hasattr(hist.columns, 'levels'): hist.columns = hist.columns.get_level_values(0)
+    try: hist.index = hist.index.tz_localize(None) if hist.index.tzinfo else hist.index
+    except: pass
+    hist = hist.dropna(subset=['Close', 'High', 'Low'])
+    with _daily_lock:
+        if len(_daily_cache) > 60: _daily_cache.clear()
+        _daily_cache[sym] = (now, hist)
+    return hist.copy()
+
+def _live_price_quick(sym):
+    """Upstox LTP (header wale price se match karne ke liye). Na mile to None."""
+    try:
+        if not _upstox_token: return None
+        ikey = _get_instrument_key(sym)
+        if not ikey: return None
+        import requests as _rq
+        r = _rq.get('https://api.upstox.com/v2/market-quote/quotes?instrument_key=' +
+                    ikey.replace('|', '%7C').replace(' ', '%20'), headers=_upstox_headers(), timeout=6)
+        if r.status_code == 200:
+            d = r.json().get('data', {})
+            if d:
+                p = float(list(d.values())[0].get('last_price', 0) or 0)
+                return p if p > 0 else None
+    except Exception as ex:
+        print(f'[live_quick] {sym}: {ex}')
+    return None
+
+def _calc_returns(close, live=None):
+    """1D = last close vs pichli close (date-threshold wala bug nahi). Baaki: us date par ya usse pehle ki close."""
+    s_ = close.dropna()
+    if len(s_) < 2: return {}
+    idx_dates = s_.index.date
+    ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+    mkt_open = ist.weekday() < 5 and (9, 15) <= (ist.hour, ist.minute) <= (15, 30)
+    if live and mkt_open and idx_dates[-1] < ist.date():
+        ep = float(live); base1 = float(s_.iloc[-1])
+    else:
+        ep = float(s_.iloc[-1]); base1 = float(s_.iloc[-2])
+    def pct(base): return round((ep - base) / base * 100, 2) if base and base > 0 else None
+    def at_or_before(d):
+        sub = s_[idx_dates <= d]
+        return float(sub.iloc[-1]) if len(sub) else None
+    td = ist.date()
+    out = {'1D': pct(base1)}
+    for lbl, d in [('1W', td - datetime.timedelta(days=7)), ('1M', td - datetime.timedelta(days=30)),
+                   ('YTD', datetime.date(td.year - 1, 12, 31)), ('1Y', td - datetime.timedelta(days=365)),
+                   ('3Y', td - datetime.timedelta(days=365 * 3)), ('5Y', td - datetime.timedelta(days=365 * 5))]:
+        out[lbl] = pct(at_or_before(d))
+    out['MAX'] = pct(float(s_.iloc[0]))
+    return out
+
 def _compute_technical(sym, fdata=None, mode='swing'):
     # mode: swing=daily 1Y (Day), positional=weekly 2Y (Week), longterm=monthly 5Y (Month)
     import math, statistics as _stats
-    if mode == 'positional':
-        fetch_interval, fetch_period = '1wk', '2y'
-    elif mode == 'longterm':
-        # Fetch 5Y daily, resample to monthly — yfinance 1mo is unreliable
-        fetch_interval, fetch_period = '1d', '5y'
-    else:  # swing / day
-        fetch_interval, fetch_period = '1d', '1y'
     try:
-        import yfinance as yf, numpy as np
-        hist = yf.download(f"{sym}.NS", period=fetch_period, interval=fetch_interval,
-                           auto_adjust=True, progress=False)
-        if hist is None or hist.empty:
-            hist = yf.Ticker(f"{sym}.NS").history(period=fetch_period, interval=fetch_interval,
-                                                   auto_adjust=True, actions=False)
+        import numpy as np, pandas as pd, calendar
+        hist = _daily_hist_cached(sym)
         if hist is None or hist.empty: return {'error': f'{sym} ka data nahi mila'}
-        if hasattr(hist.columns,'levels'): hist.columns=hist.columns.get_level_values(0)
-        try: hist.index=hist.index.tz_localize(None) if hist.index.tzinfo else hist.index
-        except: pass
-        hist = hist.dropna(subset=['Close','High','Low'])
         if 'Volume' not in hist.columns: hist['Volume'] = 0
 
-        # ── Split-adjusted data filter ────────────────────────────────────────
+        # ── Split-adjusted data filter ──
         if len(hist) > 0:
             cur_price = float(hist['Close'].iloc[-1])
             if cur_price > 0:
-                hist = hist[(hist['Close'] >= cur_price / 20) & (hist['Close'] <= cur_price * 20)]
+                hist = hist[(hist['Close'] >= cur_price / 20) & (hist['Close'] <= cur_price * 20)].copy()
 
-        # For longterm: resample daily → monthly candles (accurate)
-        if mode == 'longterm':
-            import pandas as pd
-            hist = hist.dropna(subset=['Close','High','Low'])
-            if 'Volume' not in hist.columns: hist['Volume'] = 0
-            agg = {'Close':'last','High':'max','Low':'min','Volume':'sum'}
-            if 'Open' in hist.columns: agg['Open'] = 'first'
-            hist = hist.resample('ME').agg(agg).dropna(subset=['Close'])
+        # ── Last candle ko live price se sync (header ke price se match) ──
+        price_note = None
+        live_px = _live_price_quick(sym)
+        if live_px and len(hist):
+            lc = float(hist['Close'].iloc[-1])
+            if lc > 0 and abs(live_px - lc) / lc > 0.002:
+                li = hist.index[-1]
+                hist.loc[li, 'High'] = max(float(hist.loc[li, 'High']), live_px)
+                hist.loc[li, 'Low'] = min(float(hist.loc[li, 'Low']), live_px)
+                hist.loc[li, 'Close'] = live_px
+                price_note = f'Last candle live price Rs {live_px:.2f} se sync kiya'
+        daily = hist
+        last_day = daily.index[-1].date()
+        d252 = daily.tail(252)
+        high52_d = round(float(d252['High'].max()), 2); low52_d = round(float(d252['Low'].min()), 2)
+
+        # ── Teeno timeframe ek hi daily data se ──
+        agg = {'Close': 'last', 'High': 'max', 'Low': 'min', 'Volume': 'sum'}
+        if 'Open' in daily.columns: agg['Open'] = 'first'
+        partial_frac = 1.0
+        if mode == 'positional':
+            hist = daily.tail(520).resample('W-FRI').agg(agg).dropna(subset=['Close'])
+            wd = last_day.weekday()
+            if wd < 4: partial_frac = (wd + 1) / 5
+        elif mode == 'longterm':
+            hist = daily.resample('ME').agg(agg).dropna(subset=['Close'])
+            dim = calendar.monthrange(last_day.year, last_day.month)[1]
+            if last_day.day < dim - 2: partial_frac = max(last_day.day / dim, 0.1)
+        else:
+            hist = daily.tail(260)
 
         hist = hist.dropna(subset=['Close','High','Low'])
         if 'Volume' not in hist.columns: hist['Volume'] = 0
@@ -185,30 +257,55 @@ def _compute_technical(sym, fdata=None, mode='swing'):
             bb_pct=round((cur-bb_lower)/(bb_upper-bb_lower)*100,1) if (bb_upper-bb_lower)>0 else 50
         tr_list=[max(h[-i]-l[-i],abs(h[-i]-c[-i-1]),abs(l[-i]-c[-i-1])) for i in range(1,min(15,n))]
         atr=round(sum(tr_list)/len(tr_list),2) if tr_list else 0; atr_pct=round(atr/cur*100,2) if cur else 0
-        avg_vol_20=sum(v[-20:])/20 if n>=20 else sum(v)/n
-        vol_ratio=round(v[-1]/avg_vol_20,2) if avg_vol_20>0 else 1; vol_surge=bool(vol_ratio>=1.5)
+        if partial_frac<1.0 and n>=21: base_vol=sum(v[-21:-1])/20      # adhoora candle: pichle 20 poore candle se compare
+        else: base_vol=sum(v[-20:])/20 if n>=20 else sum(v)/n
+        exp_vol=base_vol*partial_frac
+        vol_ratio=round(v[-1]/exp_vol,2) if exp_vol>0 else 1; vol_surge=bool(vol_ratio>=1.5)
         pivot=(h[-1]+l[-1]+c[-1])/3
         r1=round(2*pivot-l[-1],2); r2=round(pivot+(h[-1]-l[-1]),2)
         s1=round(2*pivot-h[-1],2); s2=round(pivot-(h[-1]-l[-1]),2); pivot=round(pivot,2)
-        high52=round(max(h.tolist()),2); low52=round(min(l.tolist()),2)
+        high52=max(high52_d,round(cur,2)); low52=min(low52_d,round(cur,2))
         pct_from_52h=round((cur-high52)/high52*100,1)
-        sl_atr=round(cur-2*atr,2); tgt1_atr=round(cur+2*atr,2); tgt2_atr=round(cur+4*atr,2)
-        rr_ratio=round((tgt1_atr-cur)/(cur-sl_atr),2) if (cur-sl_atr)>0 else 0
+        # ── Structure-based SL + resistance-based target (R:R ab asli, 1:1 fixed nahi) ──
+        look=min(10,n); swing_low=float(min(l[-look:]))
+        entry=cur; entry_type='market'
+        if pct_from_52h>=-3 and cur<high52:                 # 52W high ke paas: breakout entry maano
+            entry=round(high52*1.002,2); entry_type='breakout'
+        sl_v=min(swing_low-0.25*atr, entry-1.0*atr)          # kam se kam 1 ATR ka room
+        max_risk=min(3.0*atr, 0.30*entry)
+        sl_v=max(sl_v, entry-max_risk)                       # bahut door SL nahi
+        risk=max(entry-sl_v,1e-9)
+        if entry_type=='breakout': res=[]                    # 52W high ke upar asli resistance nahi (pivot noise hai) -> 2R
+        else:
+            res=[x for x in (r1,r2) if x and x>entry*1.005]
+            if high52>entry*1.005: res.append(high52)
+        tgt1_v=min(res) if res else entry+2*risk             # resistance nahi = price discovery, 2R
+        tgt2_v=max(entry+3*risk, tgt1_v+atr)
+        sl_atr=round(sl_v,2); tgt1_atr=round(tgt1_v,2); tgt2_atr=round(tgt2_v,2)
+        rr_ratio=round((tgt1_v-entry)/risk,2); rr2=round((tgt2_v-entry)/risk,2)
+        risk_pct=round(risk/entry*100,1) if entry else 0
 
         patterns=[]
-        if n>=3 and o_arr is not None:
+        if n>=12 and o_arr is not None:
+            ctx_down=bool(c[-2]<c[-7]); ctx_up=bool(c[-2]>c[-7])   # pattern se pehle ka trend
+            top_zone=bool(pct_from_52h>=-10)
             body=abs(c[-1]-o_arr[-1]); rng_c=h[-1]-l[-1]
             if rng_c>0 and body/rng_c<0.1: patterns.append({'name':'Doji','icon':'⚖️','signal':'neutral','desc':'Indecision — wait for confirmation'})
             lw=min(o_arr[-1],c[-1])-l[-1]; uw=h[-1]-max(o_arr[-1],c[-1])
-            if rng_c>0 and lw>2*body and uw<body: patterns.append({'name':'Hammer','icon':'🔨','signal':'bullish','desc':'Bullish reversal signal'})
-            if rng_c>0 and uw>2*body and lw<body: patterns.append({'name':'Shooting Star','icon':'⭐','signal':'bearish','desc':'Bearish reversal signal'})
-            if n>=2:
-                pb=c[-2]-o_arr[-2]; cb=c[-1]-o_arr[-1]
-                if pb<0 and cb>0 and cb>abs(pb): patterns.append({'name':'Bullish Engulfing','icon':'🟢','signal':'bullish','desc':'Strong bullish signal'})
-                if pb>0 and cb<0 and abs(cb)>pb: patterns.append({'name':'Bearish Engulfing','icon':'🔴','signal':'bearish','desc':'Strong bearish signal'})
-            if n>=3:
-                if c[-3]<o_arr[-3] and abs(c[-2]-o_arr[-2])<0.3*(h[-2]-l[-2]) and c[-1]>o_arr[-1]: patterns.append({'name':'Morning Star','icon':'🌅','signal':'bullish','desc':'Bullish reversal — 3-candle'})
-                if c[-3]>o_arr[-3] and abs(c[-2]-o_arr[-2])<0.3*(h[-2]-l[-2]) and c[-1]<o_arr[-1]: patterns.append({'name':'Evening Star','icon':'🌇','signal':'bearish','desc':'Bearish reversal — 3-candle'})
+            if rng_c>0 and lw>2*body and uw<body:
+                if ctx_down and not top_zone: patterns.append({'name':'Hammer','icon':'🔨','signal':'bullish','desc':'Girawat ke baad — bullish reversal (confirmation chahiye)'})
+                elif top_zone: patterns.append({'name':'Hanging Man','icon':'⚠️','signal':'bearish','desc':'52W high ke paas — reversal warning, agli candle confirm kare'})
+                else: patterns.append({'name':'Hammer-like (weak context)','icon':'🔨','signal':'neutral','desc':'Support/downtrend context nahi — signal mat maano'})
+            if rng_c>0 and uw>2*body and lw<body:
+                if ctx_up: patterns.append({'name':'Shooting Star','icon':'⭐','signal':'bearish','desc':'Tezi ke baad — bearish reversal signal'})
+                else: patterns.append({'name':'Inverted Hammer-like','icon':'⭐','signal':'neutral','desc':'Uptrend context nahi — weak signal'})
+            pb=c[-2]-o_arr[-2]; cb=c[-1]-o_arr[-1]
+            if pb<0 and cb>0 and cb>abs(pb):
+                patterns.append({'name':'Bullish Engulfing','icon':'🟢','signal':'bullish' if ctx_down else 'neutral','desc':'Strong bullish signal' if ctx_down else 'Downtrend ke bina weak signal'})
+            if pb>0 and cb<0 and abs(cb)>pb:
+                patterns.append({'name':'Bearish Engulfing','icon':'🔴','signal':'bearish' if ctx_up else 'neutral','desc':'Strong bearish signal' if ctx_up else 'Uptrend ke bina weak signal'})
+            if c[-3]<o_arr[-3] and abs(c[-2]-o_arr[-2])<0.3*(h[-2]-l[-2]) and c[-1]>o_arr[-1] and ctx_down: patterns.append({'name':'Morning Star','icon':'🌅','signal':'bullish','desc':'Bullish reversal — 3-candle'})
+            if c[-3]>o_arr[-3] and abs(c[-2]-o_arr[-2])<0.3*(h[-2]-l[-2]) and c[-1]<o_arr[-1] and ctx_up: patterns.append({'name':'Evening Star','icon':'🌇','signal':'bearish','desc':'Bearish reversal — 3-candle'})
         if not patterns: patterns.append({'name':'No Strong Pattern','icon':'➖','signal':'neutral','desc':'Neutral — no clear signal'})
 
         chart_patterns=[]
@@ -253,6 +350,16 @@ def _compute_technical(sym, fdata=None, mode='swing'):
         elif score>=60: verdict="✅ BUY with Caution"; vtype="buy"; vreason=f"Technical score {score}/100 — Decent setup. Volume aur S/R confirm karo."
         elif score>=45: verdict="⏳ WAIT / WATCH"; vtype="wait"; vreason=f"Technical score {score}/100 — Mixed signals. Breakout ka wait karo."
         else: verdict="❌ AVOID for Now"; vtype="avoid"; vreason=f"Technical score {score}/100 — Weak momentum."
+        # Extended / low R:R ho to 'STRONG BUY' mat dikhao (chase se bachao)
+        extended=bool(rsi_val>70 and (bb_pct>95 or pct_from_52h>=-3))
+        if vtype in ('strong_buy','buy') and (extended or rr_ratio<1.5):
+            why=[]
+            if extended: why.append(f"RSI {rsi_val} + price upper Bollinger/52W high ke paas (extended)")
+            if rr_ratio<1.5: why.append(f"R:R sirf {rr_ratio}:1")
+            zl=[x for x in (e20,pivot) if x and x<cur]
+            zone=f" Pullback zone: Rs {min(zl)} - Rs {max(zl)}." if zl else ""
+            verdict="⏳ STRONG TREND — EXTENDED, pullback ka wait"; vtype="wait"
+            vreason=f"Trend mazboot (score {score}/100), par " + "; ".join(why) + "." + zone + " Ya breakout retest par entry dekho."
 
         # Valuation
         pe=fd.get('pe')
@@ -270,21 +377,12 @@ def _compute_technical(sym, fdata=None, mode='swing'):
             price_history=[{'date':d,'price':p} for d,p in zip(dates,closes)]
         except: pass
 
-        returns={}
-        try:
-            today=datetime.date.today(); ep_val=float(c[-1])
-            def pct(sd):
-                try:
-                    mask=hist.index.date>=sd; sub=hist.loc[mask,'Close'].dropna()
-                    if sub.empty: return None
-                    sp=float(sub.iloc[0])
-                    return round((ep_val-sp)/sp*100,2) if sp>0 else None
-                except: return None
-            for lbl,sd in [('1D',today-datetime.timedelta(days=1)),('1W',today-datetime.timedelta(weeks=1)),('1M',today-datetime.timedelta(days=30)),('YTD',datetime.date(today.year,1,1)),('1Y',today-datetime.timedelta(days=365)),('3Y',today-datetime.timedelta(days=365*3)),('5Y',today-datetime.timedelta(days=365*5))]:
-                returns[lbl]=pct(sd)
-        except: pass
+        try: returns=_calc_returns(daily['Close'], live_px)
+        except Exception: returns={}
 
-        return _clean_dict({'rsi':rsi_val,'macd':macd_val,'signal':signal_val,'macd_cross':macd_cross,'ema20':e20,'ema50':e50,'ema200':e200,'ema_align':ema_align,'cur':round(cur,2),'bb_upper':bb_upper,'bb_lower':bb_lower,'bb_mid':bb_mid,'bb_pct':bb_pct,'atr':atr,'atr_pct':atr_pct,'vol_ratio':vol_ratio,'vol_surge':vol_surge,'pivot':pivot,'r1':r1,'r2':r2,'s1':s1,'s2':s2,'high52':high52,'low52':low52,'pct_from_52h':pct_from_52h,'sl':sl_atr,'tgt1':tgt1_atr,'tgt2':tgt2_atr,'rr':rr_ratio,'patterns':patterns,'chart_patterns':chart_patterns,'score':score,'reasons_bull':rb,'reasons_bear':bear,'verdict':verdict,'verdict_type':vtype,'verdict_reason':vreason,'val_label':val_label,'val_type':val_type,'price_history':price_history,'returns':returns})
+        chart_label=f"{len(price_history)} " + {'swing':'din','positional':'hafte','longterm':'mahine'}.get(mode,'din')
+
+        return _clean_dict({'rsi':rsi_val,'macd':macd_val,'signal':signal_val,'macd_cross':macd_cross,'ema20':e20,'ema50':e50,'ema200':e200,'ema_align':ema_align,'cur':round(cur,2),'bb_upper':bb_upper,'bb_lower':bb_lower,'bb_mid':bb_mid,'bb_pct':bb_pct,'atr':atr,'atr_pct':atr_pct,'vol_ratio':vol_ratio,'vol_surge':vol_surge,'pivot':pivot,'r1':r1,'r2':r2,'s1':s1,'s2':s2,'high52':high52,'low52':low52,'pct_from_52h':pct_from_52h,'sl':sl_atr,'tgt1':tgt1_atr,'tgt2':tgt2_atr,'rr':rr_ratio,'rr2':rr2,'entry':round(entry,2),'entry_type':entry_type,'risk_pct':risk_pct,'price_note':price_note,'chart_label':chart_label,'vol_partial':bool(partial_frac<1.0),'patterns':patterns,'chart_patterns':chart_patterns,'score':score,'reasons_bull':rb,'reasons_bear':bear,'verdict':verdict,'verdict_type':vtype,'verdict_reason':vreason,'val_label':val_label,'val_type':val_type,'price_history':price_history,'returns':returns})
     except Exception as ex:
         import traceback; traceback.print_exc()
         return {'error':str(ex)}
@@ -597,8 +695,8 @@ def _fetch_ipo_data_internal():
 
     # Fetch details for all IPOs (parallel threads)
     import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-        ex.map(_fetch_detail, ipos)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        list(ex.map(_fetch_detail, ipos))
 
     for ipo in ipos:
         score,reasons=_calc_ipo_score(ipo)
@@ -866,14 +964,7 @@ def api_analyze():
                     try: hist.index=hist.index.tz_localize(None) if hist.index.tzinfo else hist.index
                     except: pass
                     hist=hist[['Close']].dropna()
-                    ep=float(hist['Close'].iloc[-1]); today=datetime.date.today()
-                    def _pct(sd):
-                        try:
-                            sub=hist.loc[hist.index.date>=sd,'Close'].dropna()
-                            if sub.empty: return None
-                            sp=float(sub.iloc[0]); return round((ep-sp)/sp*100,2) if sp>0 else None
-                        except: return None
-                    data['returns']={'1D':_pct(today-datetime.timedelta(days=1)),'1W':_pct(today-datetime.timedelta(weeks=1)),'1M':_pct(today-datetime.timedelta(days=30)),'YTD':_pct(datetime.date(today.year,1,1)),'1Y':_pct(today-datetime.timedelta(days=365)),'3Y':_pct(today-datetime.timedelta(days=365*3)),'5Y':_pct(today-datetime.timedelta(days=365*5)),'MAX':_pct(hist.index[0].date()) if not hist.empty else None}
+                    data['returns']=_calc_returns(hist['Close'], _live_price_quick(symbol))
             except: data['returns']={}
         return jsonify(_clean_dict(data))
     except Exception as e:
@@ -928,14 +1019,7 @@ def api_returns(sym):
         except: pass
         hist=hist[['Close']].dropna()
         if hist.empty: return jsonify({})
-        ep=float(hist['Close'].iloc[-1]); today=datetime.date.today()
-        def pct(sd):
-            try:
-                sub=hist.loc[hist.index.date>=sd,'Close'].dropna()
-                if sub.empty: return None
-                sp=float(sub.iloc[0]); return round((ep-sp)/sp*100,2) if sp>0 else None
-            except: return None
-        return jsonify({'1D':pct(today-datetime.timedelta(days=1)),'1W':pct(today-datetime.timedelta(weeks=1)),'1M':pct(today-datetime.timedelta(days=30)),'YTD':pct(datetime.date(today.year,1,1)),'1Y':pct(today-datetime.timedelta(days=365)),'3Y':pct(today-datetime.timedelta(days=365*3)),'5Y':pct(today-datetime.timedelta(days=365*5)),'MAX':pct(hist.index[0].date()) if not hist.empty else None})
+        return jsonify(_calc_returns(hist['Close'], _live_price_quick(sym.upper())))
     except Exception as e: return jsonify({'error':str(e)}),500
 
 @app.route('/api/live/<sym>')
@@ -960,6 +1044,13 @@ def api_live(sym):
                         ohlc  = v.get('ohlc', {}) or {}
                         prev  = float(ohlc.get('close', 0) or 0)
                         chg   = round(ltp - prev, 2) if prev else 0.0
+                        if abs(chg) < 1e-9 and ltp:      # close ke baad ohlc.close = aaj ka close
+                            try: nc = float(v.get('net_change', 0) or 0)
+                            except: nc = 0.0
+                            if nc: chg = round(nc, 2); prev = ltp - nc
+                            else:
+                                _pcm = _upstox_prev_close_map([(sym, ikey)])
+                                if _pcm.get(sym): prev = _pcm[sym]; chg = round(ltp - prev, 2)
                         chg_p = round((ltp - prev) / prev * 100, 2) if prev > 0 else 0.0
                         if ltp:
                             return jsonify({
@@ -1745,9 +1836,62 @@ def api_news(sym):
 
     return jsonify({'news': news, 'docs': docs})
 
+# ── IPO cache: scraping slow hai (ipowatch + NSE + har IPO ka detail page), isliye cache karo ──
+_IPO_CACHE_FILE = os.path.join(BASE, 'ipo_cache.json')
+_IPO_TTL = 15 * 60          # itne second tak data fresh maana jayega
+_ipo_cache = {'data': None, 'ts': 0.0}
+_ipo_lock = threading.Lock()
+_ipo_refreshing = False
+
+def _ipo_load_disk():
+    try:
+        if os.path.exists(_IPO_CACHE_FILE):
+            with open(_IPO_CACHE_FILE, 'r', encoding='utf-8') as f:
+                d = json.load(f)
+            if d.get('data'): _ipo_cache.update(data=d['data'], ts=float(d.get('ts', 0)))
+    except Exception as ex:
+        print(f'[IPO cache load] {ex}')
+
+def _ipo_refresh():
+    """Fresh data fetch karke cache me daalo. Fail/empty ho to purana cache rakho."""
+    global _ipo_refreshing
+    with _ipo_lock:
+        if _ipo_refreshing: return False
+        _ipo_refreshing = True
+    try:
+        data = _fetch_ipo_data_internal()
+        if data:
+            _ipo_cache.update(data=data, ts=time.time())
+            try:
+                with open(_IPO_CACHE_FILE, 'w', encoding='utf-8') as f:
+                    json.dump({'data': data, 'ts': _ipo_cache['ts']}, f, ensure_ascii=False)
+            except Exception as ex:
+                print(f'[IPO cache save] {ex}')
+            return True
+    except Exception as ex:
+        print(f'[IPO refresh] {ex}')
+    finally:
+        _ipo_refreshing = False
+    return False
+
 @app.route('/api/ipo')
 def api_ipo():
-    try: return jsonify(_fetch_ipo_data_internal())
+    try:
+        force = request.args.get('refresh') == '1'
+        age = time.time() - _ipo_cache['ts']
+        if _ipo_cache['data'] and not force:
+            # Cache hai -> turant do. Purana ho gaya to background me update karo.
+            if age > _IPO_TTL and not _ipo_refreshing:
+                threading.Thread(target=_ipo_refresh, daemon=True).start()
+            return jsonify(_ipo_cache['data'])
+        # Cache nahi (pehli baar) ya force refresh -> wait karke fetch
+        if _ipo_refreshing and not force:
+            for _ in range(90):                     # max ~90s wait agar warm-up chal raha ho
+                time.sleep(1)
+                if _ipo_cache['data']: return jsonify(_ipo_cache['data'])
+        _ipo_refresh()
+        if _ipo_cache['data']: return jsonify(_ipo_cache['data'])
+        return jsonify({'error': 'IPO data fetch nahi ho paya'}), 500
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({'error':str(e)}),500
@@ -2948,7 +3092,11 @@ if os.environ.get('RENDER_EXTERNAL_URL'):
     print("🔄 Keep-alive thread started")
 
 from events_module import register_events
-register_events(app, NSE_SESSION, _login_required, _user_data)     
+register_events(app, NSE_SESSION, _login_required, _user_data)
+
+# IPO cache: disk se turant load, aur background me fresh data fetch (user ko wait na karna pade)
+_ipo_load_disk()
+threading.Thread(target=_ipo_refresh, daemon=True).start()     
 
 if __name__=='__main__':
     print("🚀 Stock Analyzer Pro Web — http://localhost:5000")
