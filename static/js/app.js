@@ -675,6 +675,8 @@ async function renderTechnical(mode) {
       <div>
         <div class="verdict-text" style="color:${vc.col}">${escHTML(r.verdict)}</div>
         <div class="verdict-reason">Technical Score: ${r.score}/100</div>
+        ${r.verdict_reason ? `<div class="verdict-reason" style="margin-top:4px;font-size:11px;line-height:1.4">${escHTML(r.verdict_reason)}</div>` : ''}
+        ${r.price_note ? `<div class="verdict-reason" style="margin-top:3px;font-size:10px;opacity:.7">${escHTML(r.price_note)}</div>` : ''}
       </div>
     </div>`;
 
@@ -726,7 +728,7 @@ async function renderTechnical(mode) {
       <div class="tech-card">
         <div class="tc-label">Volume</div>
         <div class="tc-val" style="color:${r.vol_surge ? 'var(--green)' : 'var(--subtext)'}">${r.vol_ratio}x</div>
-        <div class="tc-sub">${r.vol_surge ? '🔥 Volume Surge!' : 'Normal volume'}</div>
+        <div class="tc-sub">${r.vol_surge ? '🔥 Volume Surge!' : (r.vol_ratio < 0.7 ? 'Low volume' : 'Normal volume')}${r.vol_partial ? ' (adhoora period, prorated)' : ''}</div>
       </div>
     </div>`;
 
@@ -742,27 +744,32 @@ async function renderTechnical(mode) {
     </div>`;
 
     // Target & SL
-    html += `<div class="section-hdr">🎯 Target & Stop Loss (ATR-based)</div>
+    html += `<div class="section-hdr">🎯 Trade Plan (Structure-based)</div>
     <div class="tech-grid">
+      <div class="tech-card">
+        <div class="tc-label">${r.entry_type === 'breakout' ? 'Breakout Entry' : 'Entry (LTP)'}</div>
+        <div class="tc-val" style="color:var(--accent)">₹${r.entry}</div>
+        <div class="tc-sub">${r.entry_type === 'breakout' ? '52W high ke upar close/hold par' : 'Abhi ke price par'}</div>
+      </div>
       <div class="tech-card">
         <div class="tc-label">Stop Loss</div>
         <div class="tc-val" style="color:var(--red)">₹${r.sl}</div>
-        <div class="tc-sub">2× ATR below LTP</div>
+        <div class="tc-sub">Swing low ke neeche · risk ${r.risk_pct}%</div>
       </div>
       <div class="tech-card">
         <div class="tc-label">Target 1</div>
         <div class="tc-val" style="color:var(--green)">₹${r.tgt1}</div>
-        <div class="tc-sub">2× ATR above LTP</div>
+        <div class="tc-sub">Nearest resistance (ya 2R)</div>
       </div>
       <div class="tech-card">
         <div class="tc-label">Target 2</div>
         <div class="tc-val" style="color:var(--green)">₹${r.tgt2}</div>
-        <div class="tc-sub">4× ATR above LTP</div>
+        <div class="tc-sub">3R / aage ka target</div>
       </div>
       <div class="tech-card">
         <div class="tc-label">R:R Ratio</div>
         <div class="tc-val" style="color:${r.rr >= 1.5 ? 'var(--green)' : 'var(--yellow)'}">${r.rr}:1</div>
-        <div class="tc-sub">${r.rr >= 1.5 ? '✅ Good R:R' : '⚠️ Low R:R'}</div>
+        <div class="tc-sub">${r.rr >= 2 ? '✅ Good R:R' : r.rr >= 1.5 ? '🟡 OK R:R' : '⚠️ Low R:R — is entry par reward kam'}</div>
       </div>
     </div>`;
 
@@ -836,7 +843,7 @@ async function renderTechnical(mode) {
 
     // Price Chart
     if (r.price_history && r.price_history.length > 0) {
-      html += `<div class="section-hdr">📉 Price Chart (60 days)</div>
+      html += `<div class="section-hdr">📉 Price Chart (${r.chart_label || '60 days'})</div>
       <div class="chart-wrap">
         <canvas id="price-chart" height="200"></canvas>
       </div>`;
