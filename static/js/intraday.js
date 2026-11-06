@@ -167,6 +167,15 @@ function renderSignals(d) {
 
   const orb = d.orb ? '<div class="id-card"><div class="id-card-title">📐 Opening Range Breakout</div><div class="id-orb-row"><span>High: <b style="color:var(--green)">'+d.orb.high+'</b></span><span>Low: <b style="color:var(--red)">'+d.orb.low+'</b></span><span style="font-weight:700">'+escHTML(d.orb.status)+'</span></div></div>' : '';
 
+  const warnBox = (d.warnings && d.warnings.length)
+    ? '<div class="id-card" style="border-left:3px solid var(--yellow);margin:8px 0"><div class="id-card-title">⚠️ Dhyan rakho</div>' +
+      d.warnings.map(w => '<div class="id-reason" style="color:var(--yellow)">• ' + escHTML(w) + '</div>').join('') + '</div>' : '';
+  const lv = (k, v, col) => v != null ? '<div class="id-metric"><span class="id-m-label">' + k + '</span><span class="id-m-val" style="color:' + col + '">' + fmtNum(v) + '</span></div>' : '';
+  const levelsCard = (d.pdh != null || d.day_high != null)
+    ? '<div class="id-card"><div class="id-card-title">📍 Key Levels</div><div class="id-metrics-grid">' +
+      lv('PDH', d.pdh, 'var(--green)') + lv('PDL', d.pdl, 'var(--red)') + lv('PDC', d.pdc, 'var(--subtext)') +
+      lv('Day High', d.day_high, 'var(--green)') + lv('Day Low', d.day_low, 'var(--red)') + '</div></div>' : '';
+
   const vwapRow = d.vwap ? '<div class="id-metric"><span class="id-m-label">VWAP</span><span class="id-m-val" style="color:'+(d.cur>d.vwap?'var(--green)':'var(--red)')+'">'+d.vwap+'</span></div>' : '';
 
   return `
@@ -185,6 +194,7 @@ function renderSignals(d) {
     </div>
 
     <div class="id-option-hint">${escHTML(d.option_hint || '')}</div>
+    ${warnBox}
 
     <div class="id-metrics-grid">
       <div class="id-metric"><span class="id-m-label">RSI (14)</span><span class="id-m-val" style="color:${d.rsi>70?'var(--red)':d.rsi<30?'var(--orange)':'var(--green)'}">${d.rsi}</span></div>
@@ -195,10 +205,11 @@ function renderSignals(d) {
       <div class="id-metric"><span class="id-m-label">Supertrend</span><span class="id-m-val" style="color:${d.supertrend_signal==='BUY'?'var(--green)':'var(--red)'}">${d.supertrend} ${escHTML(d.supertrend_signal)}</span></div>
       <div class="id-metric"><span class="id-m-label">ATR</span><span class="id-m-val">${d.atr}</span></div>
       <div class="id-metric"><span class="id-m-label">BB %</span><span class="id-m-val">${d.bb_pct != null ? d.bb_pct+'%' : '—'}</span></div>
-      <div class="id-metric"><span class="id-m-label">Vol Ratio</span><span class="id-m-val" style="color:${d.vol_ratio>=1.5?'var(--green)':'var(--subtext)'}">${d.vol_ratio}x</span></div>
+      <div class="id-metric"><span class="id-m-label">Vol Ratio</span><span class="id-m-val" style="color:${(d.vol_ratio||0)>=1.5?'var(--green)':'var(--subtext)'}">${d.vol_ratio != null ? d.vol_ratio + 'x' : '—'}</span></div>
     </div>
 
     ${orb}
+    ${levelsCard}
 
     <div class="id-sl-tgt-grid">
       <div class="id-sl-card buy">
@@ -206,14 +217,14 @@ function renderSignals(d) {
         <div>Entry: <b>₹${fmtNum(d.cur)}</b></div>
         <div>SL: <b style="color:var(--red)">₹${fmtNum(d.sl_buy)}</b></div>
         <div>Target: <b style="color:var(--green)">₹${fmtNum(d.tgt_buy)}</b></div>
-        <div style="font-size:11px;color:var(--subtext);margin-top:4px">R:R = 1:${d.atr>0?((d.tgt_buy-d.cur)/(d.cur-d.sl_buy)).toFixed(1):'—'}</div>
+        <div style="font-size:11px;color:var(--subtext);margin-top:4px">R:R = 1:${d.rr_buy != null ? d.rr_buy : '—'}${d.rr_buy != null && d.rr_buy < 1.5 ? ' ⚠️ Low R:R' : ''}</div>
       </div>
       <div class="id-sl-card sell">
         <div class="id-sl-title">📉 SELL Setup</div>
         <div>Entry: <b>₹${fmtNum(d.cur)}</b></div>
         <div>SL: <b style="color:var(--red)">₹${fmtNum(d.sl_sell)}</b></div>
         <div>Target: <b style="color:var(--green)">₹${fmtNum(d.tgt_sell)}</b></div>
-        <div style="font-size:11px;color:var(--subtext);margin-top:4px">R:R = 1:${d.atr>0?((d.cur-d.tgt_sell)/(d.sl_sell-d.cur)).toFixed(1):'—'}</div>
+        <div style="font-size:11px;color:var(--subtext);margin-top:4px">R:R = 1:${d.rr_sell != null ? d.rr_sell : '—'}${d.rr_sell != null && d.rr_sell < 1.5 ? ' ⚠️ Low R:R' : ''}</div>
       </div>
     </div>
 
@@ -248,10 +259,10 @@ function renderHedgeAdvisor(d) {
 
   // RSI guard: overbought/oversold me 'STRONG' signal mat do (chase karna risky hai)
   let rsiWarn = '';
-  if (bias === 'strong_bull' && rsi >= 75) { bias = 'bull'; rsiWarn = `RSI ${rsi} overbought — naya CALL lene me jaldi mat karo, pullback ka wait karo`; }
-  else if (bias === 'strong_bear' && rsi <= 25) { bias = 'bear'; rsiWarn = `RSI ${rsi} oversold — naya PUT lene me jaldi mat karo, bounce ho sakta hai`; }
-  else if (bias === 'bull' && rsi >= 75) { rsiWarn = `RSI ${rsi} overbought — reversal risk`; }
-  else if (bias === 'bear' && rsi <= 25) { rsiWarn = `RSI ${rsi} oversold — bounce risk`; }
+  if (bias === 'strong_bull' && (rsi >= 75 || d.extended)) { bias = 'bull'; rsiWarn = `RSI ${rsi} overbought — naya CALL lene me jaldi mat karo, pullback ka wait karo`; }
+  else if (bias === 'strong_bear' && (rsi <= 25 || d.extended)) { bias = 'bear'; rsiWarn = `RSI ${rsi} oversold — naya PUT lene me jaldi mat karo, bounce ho sakta hai`; }
+  else if (bias === 'bull' && (rsi >= 75 || d.extended)) { rsiWarn = `Price extended (RSI ${rsi}) — fresh entry se bacho, pullback ka wait karo`; }
+  else if (bias === 'bear' && (rsi <= 25 || d.extended)) { rsiWarn = `Price extended (RSI ${rsi}) — bounce risk, pullback ka wait karo`; }
 
   // ── Strike suggestions (ATM ± 1 step) ─────────────────────────────────────
   // Round to nearest 50 for indices, 10/20/50 for stocks
@@ -276,7 +287,7 @@ function renderHedgeAdvisor(d) {
         risk: 'Limited (premium paid)',
         reward: 'Unlimited upside',
         when: 'Expiry tak hold karo agar trend continue kare',
-        sl: `SL: ₹${fmtNum(d.sl_buy)} (stock/index pe)`,
+        sl: `Index SL: ₹${fmtNum(d.sl_buy)} · Premium SL: entry premium ka ~30% loss par exit`,
       },
       {
         action: 'PUT SELL',
@@ -305,7 +316,7 @@ function renderHedgeAdvisor(d) {
         risk: 'Limited (premium paid)',
         reward: 'Good upside potential',
         when: 'Confirmation ke baad enter karo',
-        sl: `SL: ₹${fmtNum(d.sl_buy)}`,
+        sl: `Index SL: ₹${fmtNum(d.sl_buy)} · Premium SL: entry premium ka ~30% loss par exit`,
       },
       {
         action: 'BULL CALL SPREAD',
@@ -316,7 +327,7 @@ function renderHedgeAdvisor(d) {
         strike: `BUY ${atm} CE + SELL ${otm1} CE`,
         reason: `Cost kam karo — limited upside but cheaper entry`,
         risk: 'Limited (net debit)',
-        reward: `Max profit: ${step} points`,
+        reward: `Max profit = ${step} pts (spread width) − net debit`,
         when: 'Moderate bullish view ke liye best',
         sl: `Exit agar ${atm} CE 50% loss ho`,
       },
@@ -363,7 +374,7 @@ function renderHedgeAdvisor(d) {
         risk: 'Limited (premium paid)',
         reward: 'Good downside capture',
         when: 'Confirmation ke baad enter karo',
-        sl: `SL: ₹${fmtNum(d.sl_sell)}`,
+        sl: `Index SL: ₹${fmtNum(d.sl_sell)} · Premium SL: entry premium ka ~30% loss par exit`,
       },
       {
         action: 'BEAR PUT SPREAD',
@@ -374,7 +385,7 @@ function renderHedgeAdvisor(d) {
         strike: `BUY ${atm} PE + SELL ${otm1p} PE`,
         reason: `Cost kam karo — limited downside but cheaper entry`,
         risk: 'Limited (net debit)',
-        reward: `Max profit: ${step} points`,
+        reward: `Max profit = ${step} pts (spread width) − net debit`,
         when: 'Moderate bearish view ke liye best',
         sl: `Exit agar ${atm} PE 50% loss ho`,
       },
