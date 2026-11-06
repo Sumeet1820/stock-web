@@ -2198,6 +2198,132 @@ def api_intraday_candles():
         return jsonify({'error': str(e)}), 500
 
 
+_pdl_cache = {}
+def _prev_day_levels(sym):
+    """Pichle trading din ka High/Low/Close (PDH/PDL/PDC) — intraday ke sabse kaam ke levels."""
+    now = time.time(); c = _pdl_cache.get(sym)
+    if c and now - c[0] < 600: return c[1]
+    out = (None, None, None)
+    try:
+        import yfinance as yf
+        idxm = {'NIFTY': '^NSEI', 'BANKNIFTY': '^NSEBANK', 'FINNIFTY': 'NIFTY_FIN_SERVICE.NS', 'SENSEX': '^BSESN'}
+        h = yf.download(idxm.get(sym, f'{sym}.NS'), period='10d', interval='1d', auto_adjust=True, progress=False)
+        if h is not None and not h.empty:
+            if hasattr(h.columns, 'levels'): h.columns = h.columns.get_level_values(0)
+            h = h.dropna(subset=['Close'])
+            today_ist = (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).date()
+            h2 = h[h.index.date < today_ist]
+            if len(h2):
+                r = h2.iloc[-1]
+                out = (round(float(r['High']), 2), round(float(r['Low']), 2), round(float(r['Close']), 2))
+    except Exception as ex:
+        print(f'[prev_day_levels] {sym}: {ex}')
+    _pdl_cache[sym] = (now, out)
+    return out
+
+
+# ── Sector Momentum ───────────────────────────────────────────────────────────
+SECTOR_YF = {   # naam: (yfinance ticker, app ka NSE index naam jo /api/index-stocks me chalta hai)
+    'Bank': ('^NSEBANK', 'NIFTY BANK'), 'IT': ('^CNXIT', 'NIFTY IT'), 'Auto': ('^CNXAUTO', 'NIFTY AUTO'),
+    'FMCG': ('^CNXFMCG', 'NIFTY FMCG'), 'Pharma': ('^CNXPHARMA', 'NIFTY PHARMA'), 'Metal': ('^CNXMETAL', 'NIFTY METAL'),
+    'Realty': ('^CNXREALTY', 'NIFTY REALTY'), 'Energy': ('^CNXENERGY', 'NIFTY ENERGY'),
+    'Infra': ('^CNXINFRA', 'NIFTY INFRASTRUCTURE'), 'Media': ('^CNXMEDIA', 'NIFTY MEDIA'),
+    'PSU Bank': ('^CNXPSUBANK', 'NIFTY PSU BANK'), 'Fin Services': ('NIFTY_FIN_SERVICE.NS', 'NIFTY FIN SERVICE'),
+}
+_sector_cache = {'ts': 0.0, 'data': None}
+
+
+def _sector_series(ticker):
+    import yfinance as yf
+    h = yf.download(ticker, period='1y', interval='1d', auto_adjust=True, progress=False)
+    if h is None or h.empty: return None
+    if hasattr(h.columns, 'levels'): h.columns = h.columns.get_level_values(0)
+    return h['Close'].dropna()
+
+
+def _score_sector(name, close, bench):
+    """close/bench: daily close Series. Data-based momentum score; prediction nahi."""
+    import pandas as pd
+    df = pd.concat([close.rename('s'), bench.rename('b')], axis=1).dropna()
+    if len(df) < 70: return None
+    s_, b_ = df['s'], df['b']
+
+    def ret(x, n):
+        return round((float(x.iloc[-1]) / float(x.iloc[-1 - n]) - 1) * 100, 2) if len(x) > n else None
+
+    r1d, r1w, r1m, r3m, r6m = ret(s_, 1), ret(s_, 5), ret(s_, 21), ret(s_, 63), ret(s_, 126)
+    b1m, b3m, b6m = ret(b_, 21), ret(b_, 63), ret(b_, 126)
+    rs1m = round(r1m - b1m, 2); rs3m = round(r3m - b3m, 2)
+    rs6m = round(r6m - b6m, 2) if (r6m is not None and b6m is not None) else 0.0
+    dma50 = float(s_.tail(50).mean()); dma200 = float(s_.tail(200).mean()) if len(s_) >= 200 else None
+    cur = float(s_.iloc[-1])
+    rs_line = s_ / b_
+    rs_now = float(rs_line.iloc[-1]); rs_10 = float(rs_line.iloc[-11]); rs_21 = float(rs_line.iloc[-22])
+    rs_hi3m = float(rs_line.tail(63).max())
+    above50 = cur > dma50; above200 = (cur > dma200) if dma200 else None
+    rs_rising = rs_now > rs_10 and rs_now > rs_21
+    rs_near_high = rs_now >= rs_hi3m * 0.98
+    score = 0
+    score += 25 if rs1m > 0 else (10 if rs1m > -1 else 0)
+    score += 20 if rs3m > 0 else (8 if rs3m > -2 else 0)
+    score += 15 if above50 else 0
+    score += 10 if above200 else 0
+    score += 10 if (dma200 and dma50 > dma200) else 0
+    score += 10 if rs_rising else 0
+    score += 10 if rs_near_high else 0
+    if score >= 70 and rs1m > 0 and rs3m > 3 and rs6m > 5:
+        cat, why = 'boom', 'Lambe samay se Nifty se aage (1M, 3M, 6M), trend mazboot'
+    elif rs1m > 1 and rs_rising and above50 and rs6m <= 5:
+        cat, why = 'early', 'Abhi-abhi Nifty se aage nikalna shuru (pehle peeche/barabar tha) — rotation ka early sign'
+    elif rs3m > 0 and (rs1m < 0 or not rs_rising):
+        cat, why = 'fading', 'Pehle leader tha, ab Nifty se relative strength kam ho rahi hai'
+    else:
+        cat, why = 'weak', 'Nifty se peeche ya trend kamzor'
+    return {'name': name, 'cat': cat, 'why': why, 'score': int(score), 'r1d': r1d, 'r1w': r1w, 'r1m': r1m, 'r3m': r3m,
+            'rs1m': rs1m, 'rs3m': rs3m, 'rs6m': rs6m, 'r6m': r6m, 'above50': bool(above50),
+            'above200': None if above200 is None else bool(above200),
+            'rs_rising': bool(rs_rising), 'last': round(cur, 2)}
+
+
+@app.route('/api/sector-momentum')
+def api_sector_momentum():
+    try:
+        force = request.args.get('refresh') == '1'
+        if _sector_cache['data'] and not force and time.time() - _sector_cache['ts'] < 600:
+            return jsonify(_sector_cache['data'])
+        from concurrent.futures import ThreadPoolExecutor
+        bench = _sector_series('^NSEI')
+        if bench is None or len(bench) < 70:
+            return jsonify({'error': 'Nifty 50 ka data nahi mila'}), 502
+
+        def work(it):
+            nm, (tk, idx) = it
+            try:
+                ser = _sector_series(tk)
+                r = _score_sector(nm, ser, bench) if ser is not None else None
+                if r: r['idx'] = idx
+                return (nm, r)
+            except Exception as ex:
+                print(f'[sector] {nm}: {ex}')
+                return (nm, None)
+
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            res = list(ex.map(work, list(SECTOR_YF.items())))
+        rows = [r for _, r in res if r]
+        missing = [nm for nm, r in res if not r]
+        rows.sort(key=lambda r: r['score'], reverse=True)
+        out = {'rows': rows, 'missing': missing,
+               'updated': (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).strftime('%d %b %H:%M IST'),
+               'nifty_1m': round((float(bench.iloc[-1]) / float(bench.iloc[-22]) - 1) * 100, 2),
+               'nifty_3m': round((float(bench.iloc[-1]) / float(bench.iloc[-64]) - 1) * 100, 2)}
+        if rows:
+            _sector_cache.update(ts=time.time(), data=out)
+        return jsonify(out)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/intraday/signals')
 def api_intraday_signals():
     """Full intraday signal analysis — Upstox for all symbols (indices + stocks), yfinance fallback"""
@@ -2333,6 +2459,13 @@ def api_intraday_signals():
         v = np.array([x[5] for x in candles_rs], dtype=float)
         n = len(c)
 
+        # Aaj ki candles ka start (VWAP/ORB/day-high-low sirf aaj ke liye)
+        if tf in DAILY_TF:
+            ds = max(0, n - 20)
+        else:
+            last_day_s = str(candles_rs[-1][0])[:10]
+            ds = next((i for i, x in enumerate(candles_rs) if str(x[0])[:10] == last_day_s), 0)
+
         def ema(arr, p):
             k = 2/(p+1); e = [arr[0]]
             for x in arr[1:]: e.append(x*k + e[-1]*(1-k))
@@ -2351,8 +2484,9 @@ def api_intraday_signals():
 
         # VWAP
         tp = (h+l+c)/3
-        cum_vol = np.cumsum(v)
-        vwap = round(float(np.sum(tp*v)/cum_vol[-1]),2) if cum_vol[-1]>0 else None
+        vwap = None
+        if tf not in DAILY_TF and float(np.sum(v[ds:]))>0:
+            vwap = round(float(np.sum(tp[ds:]*v[ds:])/np.sum(v[ds:])),2)
 
         # Supertrend
         atr_p=10; mult=3.0
@@ -2376,13 +2510,22 @@ def api_intraday_signals():
         macd_val=round(float(macd_line[-1]),2); sig_val=round(float(sig_line[-1]),2)
         macd_cross='Bullish' if macd_val>sig_val else 'Bearish'
 
-        # ORB
+        # ORB (pehle 15 min, sirf aaj ke candles; <=30m timeframe par)
         orb=None
-        if n>=3:
-            orb_h=float(np.max(h[:3])); orb_l=float(np.min(l[:3]))
-            cur=float(c[-1])
-            orb_status='ABOVE ORB 🚀' if cur>orb_h else ('BELOW ORB 📉' if cur<orb_l else 'INSIDE ORB ⏳')
-            orb={'high':round(orb_h,2),'low':round(orb_l,2),'status':orb_status}
+        _tfm={'3m':3,'5m':5,'15m':15,'30m':30}.get(tf)
+        if _tfm and (n-ds)>max(1,round(15/_tfm)):
+            k=max(1,round(15/_tfm))
+            orb_h=float(np.max(h[ds:ds+k])); orb_l=float(np.min(l[ds:ds+k])); cur=float(c[-1])
+            rng_o=max(orb_h-orb_l,1e-9)
+            if cur>orb_h:
+                ext_o=(cur-orb_h)/rng_o
+                orb_status='ABOVE ORB 🚀'+(' (extended — chase mat karo)' if ext_o>1.5 else '')
+            elif cur<orb_l:
+                ext_o=(orb_l-cur)/rng_o
+                orb_status='BELOW ORB 📉'+(' (extended — chase mat karo)' if ext_o>1.5 else '')
+            else:
+                ext_o=0.0; orb_status='INSIDE ORB ⏳'
+            orb={'high':round(orb_h,2),'low':round(orb_l,2),'status':orb_status,'ext':round(ext_o,1)}
 
         # BB
         bb_mid=bb_upper=bb_lower=bb_pct=None
@@ -2392,8 +2535,11 @@ def api_intraday_signals():
             rng=bb_upper-bb_lower
             bb_pct=round((float(c[-1])-bb_lower)/rng*100,1) if rng>0 else 50
 
-        avg_vol=float(np.mean(v[-20:])) if n>=20 else float(np.mean(v))
-        vol_ratio=round(float(v[-1])/avg_vol,2) if avg_vol>0 else 1.0
+        if float(np.sum(v))<=0: vol_ratio=None            # index: volume data nahi
+        elif n>=22:
+            avg_vol=float(np.mean(v[-22:-2])); vol_ratio=round(float(v[-2])/avg_vol,2) if avg_vol>0 else None
+        else:
+            avg_vol=float(np.mean(v)); vol_ratio=round(float(v[-1])/avg_vol,2) if avg_vol>0 else None
         atr_val=round(float(atr_arr[-1]),2)
         cur=float(c[-1])
 
@@ -2420,8 +2566,44 @@ def api_intraday_signals():
         elif score<=40: verdict='SELL / AVOID'; vtype='sell'; hint='PUT option — confirm karo pehle'
         else: verdict='NEUTRAL / WAIT'; vtype='neutral'; hint='Sideline raho — clear signal nahi'
 
-        sl_buy=round(cur-1.5*atr_val,2); tgt_buy=round(cur+2*atr_val,2)
-        sl_sell=round(cur+1.5*atr_val,2); tgt_sell=round(cur-2*atr_val,2)
+        # ── Structure-based SL/Target (R:R ab fixed nahi) ──
+        look=min(6,n); sw_low=float(np.min(l[-look:])); sw_high=float(np.max(h[-look:]))
+        day_hi=float(np.max(h[ds:])); day_lo=float(np.min(l[ds:]))
+        e21=float(ema21[-1])
+        sl_b=min(sw_low,e21)-0.25*atr_val
+        sl_b=min(sl_b,cur-1.0*atr_val); sl_b=max(sl_b,cur-3.0*atr_val)
+        risk_b=max(cur-sl_b,1e-9)
+        tgt_b=min(day_hi,cur+3*risk_b) if day_hi>=cur+1.5*risk_b else cur+2*risk_b     # max 3R
+        sl_s=max(sw_high,e21)+0.25*atr_val
+        sl_s=max(sl_s,cur+1.0*atr_val); sl_s=min(sl_s,cur+3.0*atr_val)
+        risk_s=max(sl_s-cur,1e-9)
+        tgt_s=max(day_lo,cur-3*risk_s) if day_lo<=cur-1.5*risk_s else cur-2*risk_s     # max 3R
+        sl_buy=round(sl_b,2); tgt_buy=round(tgt_b,2); sl_sell=round(sl_s,2); tgt_sell=round(tgt_s,2)
+        rr_buy=round((tgt_b-cur)/risk_b,2); rr_sell=round((cur-tgt_s)/risk_s,2)
+
+        # ── Extended / time warnings ──
+        ext_atr=(cur-e21)/atr_val if atr_val>0 else 0.0
+        ext_up=bool(rsi_val>=75 or (bb_pct is not None and bb_pct>100) or ext_atr>3)
+        ext_dn=bool(rsi_val<=25 or (bb_pct is not None and bb_pct<0) or ext_atr<-3)
+        extended=False; warnings=[]
+        if vtype in ('strong_buy','buy') and ext_up:
+            extended=True; verdict='BUY — EXTENDED'
+            hint='Fresh CALL mat lo: price EMA21/VWAP se bahut door hai. Pullback ka wait karo'
+            warnings.append(f'Price EMA21 se {round(ext_atr,1)} ATR upar, RSI {rsi_val} — chase risky, pullback par entry dekho')
+        elif vtype in ('strong_sell','sell') and ext_dn:
+            extended=True; verdict='SELL — EXTENDED'
+            hint='Fresh PUT mat lo: price bahut gir chuka hai, bounce ka risk. Pullback ka wait karo'
+            warnings.append(f'Price EMA21 se {round(abs(ext_atr),1)} ATR neeche, RSI {rsi_val} — bounce risk')
+        if tf in INTRADAY_TF:
+            ist_now=datetime.datetime.utcnow()+datetime.timedelta(hours=5,minutes=30)
+            hm=(ist_now.hour,ist_now.minute)
+            if ist_now.weekday()<5 and (14,30)<=hm<=(15,30):
+                warnings.append('2:30 PM ke baad naya option buying risky — theta tezi se kat-ta hai')
+            if ist_now.weekday()<5 and (9,15)<=hm<(9,30):
+                warnings.append('Pehle 15 min noise zyada hota hai — ORB banne ka wait karo')
+        if tf in ('3m','5m'): warnings.append('5m signal ko 15m/1H trend se confirm karo (bade timeframe ke against trade mat lo)')
+        if vol_ratio is None: warnings.append('Index ka volume data nahi hota — volume confirmation yahan nahi milega')
+        pdh,pdl,pdc=_prev_day_levels(sym) if tf in INTRADAY_TF else (None,None,None)
 
         chart_candles=[]
         for i in range(max(0,n-60),n):
@@ -2446,7 +2628,7 @@ def api_intraday_signals():
             'atr':atr_val,'vol_ratio':vol_ratio,'orb':orb,'score':score,
             'verdict':verdict,'verdict_type':vtype,'option_hint':hint,
             'bull_reasons':bull,'bear_reasons':bear,
-            'sl_buy':sl_buy,'tgt_buy':tgt_buy,'sl_sell':sl_sell,'tgt_sell':tgt_sell,
+            'sl_buy':sl_buy,'tgt_buy':tgt_buy,'sl_sell':sl_sell,'tgt_sell':tgt_sell,'rr_buy':rr_buy,'rr_sell':rr_sell,'extended':extended,'warnings':warnings,'pdh':pdh,'pdl':pdl,'pdc':pdc,'day_high':round(day_hi,2),'day_low':round(day_lo,2),'ext_atr':round(ext_atr,1),
             'candles':chart_candles,'data_source':data_source,
         })
     except Exception as e:
