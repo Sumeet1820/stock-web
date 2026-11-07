@@ -1618,6 +1618,47 @@ def api_index_stocks():
         return jsonify([{'symbol': s, 'ltp': 0, 'chg': 0.0} for s in syms])
 
     return jsonify([])
+# ── Custom Chartink scans (saved slug ki jagah seedha scan_clause chalta hai) ──────────────────────
+CHARTINK_CUSTOM = {
+    'custom-ema20-macd-fresh-cross-rsi59': {
+        'label': '⚡ MACD Fresh Cross + EMA20 + RSI59',
+        'color': '#00E6A8',
+        # Matlab: aaj open >= kal ki close | close >= EMA20 | EMA10 >= EMA20 | MACD(26,12,9) ABHI signal ke upar cross hua
+        # (kal tak neeche/barabar tha) | RSI14 >= 59 | Market cap >= 2000 cr | Quarterly sales >= pichli quarter
+        'scan_clause': "( {cash} (  daily open >=  1 day ago close and  daily close >=  daily ema(  daily close , 20 ) and  daily ema(  daily close , 10 ) >=  daily ema(  daily close , 20 ) and  daily macd line( 26 , 12 , 9 ) >  daily macd signal( 26 , 12 , 9 ) and  1 day ago  macd line( 26 , 12 , 9 ) <=  1 day ago  macd signal( 26 , 12 , 9 ) and  daily rsi( 14 ) >=  59 and  market cap >=  2000 and  quarterly net sales >=  1 quarter ago net sales ) )",
+    },
+}
+_chartink_clause_cache = {}
+
+def _chartink_run_clause(scan_clause, timeout=25):
+    """Chartink ke /screener/process ko seedha scan_clause bhejo. Rows ko app ke format me do."""
+    import re as _re
+    import requests as _rq
+    ses = _rq.Session()
+    ses.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+                        'Accept-Language': 'en-US,en;q=0.9'})
+    page = ses.get('https://chartink.com/screener/', timeout=timeout)
+    m = _re.search(r'name="csrf-token"\s+content="([^"]+)"', page.text) or _re.search(r'content="([^"]+)"\s+name="csrf-token"', page.text)
+    if not m:
+        raise RuntimeError('Chartink CSRF token nahi mila (site block ya page badla)')
+    hdr = {'x-csrf-token': m.group(1), 'x-requested-with': 'XMLHttpRequest', 'accept': 'application/json, text/javascript, */*; q=0.01',
+           'origin': 'https://chartink.com', 'referer': 'https://chartink.com/screener/',
+           'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}
+    r = ses.post('https://chartink.com/screener/process', data={'scan_clause': scan_clause.strip()}, headers=hdr, timeout=timeout)
+    if r.status_code != 200:
+        raise RuntimeError(f'Chartink HTTP {r.status_code}: {r.text[:120]}')
+    js = r.json()
+    if js.get('scan_error'):
+        raise RuntimeError('Chartink scan error: ' + str(js['scan_error'])[:200])
+    rows = []
+    for d in js.get('data', []):
+        sym = (d.get('nsecode') or '').strip()
+        if not sym: continue                                    # sirf BSE wale skip (analysis NSE symbol par chalta hai)
+        close = d.get('close')
+        rows.append({'symbol': sym, 'name': d.get('name', ''), 'company': d.get('name', ''),
+                     'close': close, 'ltp': close, 'per_chg': d.get('per_chg'), 'volume': d.get('volume')})
+    return rows
+
 @app.route('/api/chartink-list')
 def api_chartink_list():
     return jsonify([
@@ -1640,12 +1681,22 @@ def api_chartink_list():
         {'slug':'copy-stockexploder-baap-947','label':'💣 StockExploder Baap','color':'#FF3D5C'},
         {'slug':'copy-44-ma-scanner-4','label':'📐 44 MA Custom','color':'#FF9500'},
         {'slug':'copy-rsi-strong-507293','label':'💪 RSI Strong','color':'#00E6A8'},
-    ])
+    ] + [{'slug': k, 'label': v['label'], 'color': v['color']} for k, v in CHARTINK_CUSTOM.items()])
 
 @app.route('/api/chartink/<slug>')
 def api_chartink(slug):
-    try: return jsonify(fetch_chartink(f"https://chartink.com/screener/{slug}"))
-    except Exception as e: return jsonify({'error':str(e)}),500
+    try:
+        if slug in CHARTINK_CUSTOM:
+            c = _chartink_clause_cache.get(slug)
+            if c and time.time() - c[0] < 300:                 # 5 min cache
+                return jsonify(c[1])
+            rows = _chartink_run_clause(CHARTINK_CUSTOM[slug]['scan_clause'])
+            _chartink_clause_cache[slug] = (time.time(), rows)
+            return jsonify(rows)
+        return jsonify(fetch_chartink(f"https://chartink.com/screener/{slug}"))
+    except Exception as e:
+        print(f'[chartink] {slug}: {e}')
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/etf/list')
 def api_etf_list():
