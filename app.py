@@ -166,6 +166,57 @@ def _calc_returns(close, live=None):
     out['MAX'] = pct(float(s_.iloc[0]))
     return out
 
+def _detect_candles(o, h, l, c, pct_from_52h):
+    """Candlestick patterns — strict geometry + trend context. Day/Week/Month teeno me yahi chalta hai."""
+    pats = []
+    n = len(c)
+    if o is None or n < 12: return pats
+    F = float
+    o1, h1, l1, c1 = F(o[-1]), F(h[-1]), F(l[-1]), F(c[-1])
+    o2, h2, l2, c2 = F(o[-2]), F(h[-2]), F(l[-2]), F(c[-2])
+    o3, h3, l3, c3 = F(o[-3]), F(h[-3]), F(l[-3]), F(c[-3])
+    body1, body2, body3 = abs(c1 - o1), abs(c2 - o2), abs(c3 - o3)
+    rng1 = h1 - l1
+    ctx_down = c2 < F(c[-7]); ctx_up = c2 > F(c[-7])       # pattern se pehle ka trend
+    top_zone = pct_from_52h >= -10
+    tol = 0.001                                              # 0.1% tolerance
+    lw = min(o1, c1) - l1; uw = h1 - max(o1, c1)
+    P = pats.append
+
+    if rng1 > 0 and body1 / rng1 < 0.1:
+        P({'name': 'Doji', 'icon': '⚖️', 'signal': 'neutral', 'desc': 'Indecision — confirmation ka wait'})
+
+    # Hammer / Hanging Man: chhoti body upar, lambi neeche wick (>= 2x body aur range ka >= 50%), upar wick na ke barabar
+    if rng1 > 0 and lw >= 2 * body1 and lw >= 0.5 * rng1 and uw <= 0.5 * body1 + 0.05 * rng1:
+        if ctx_down and not top_zone: P({'name': 'Hammer', 'icon': '🔨', 'signal': 'bullish', 'desc': 'Girawat ke baad — bullish reversal (confirmation chahiye)'})
+        elif top_zone: P({'name': 'Hanging Man', 'icon': '⚠️', 'signal': 'bearish', 'desc': '52W high ke paas — reversal warning, agli candle confirm kare'})
+        else: P({'name': 'Hammer-like (weak context)', 'icon': '🔨', 'signal': 'neutral', 'desc': 'Support/downtrend context nahi — signal mat maano'})
+    # Shooting Star: chhoti body neeche, lambi upar wick
+    if rng1 > 0 and uw >= 2 * body1 and uw >= 0.5 * rng1 and lw <= 0.5 * body1 + 0.05 * rng1:
+        if ctx_up: P({'name': 'Shooting Star', 'icon': '⭐', 'signal': 'bearish', 'desc': 'Tezi ke baad — bearish reversal signal'})
+        else: P({'name': 'Inverted Hammer-like', 'icon': '⭐', 'signal': 'neutral', 'desc': 'Uptrend context nahi — weak signal'})
+
+    # Engulfing: aaj ki body pichli body ko POORI dhake (open/close dono level par)
+    if c2 < o2 and c1 > o1 and o1 <= c2 * (1 + tol) and c1 >= o2 * (1 - tol) and body1 > body2:
+        P({'name': 'Bullish Engulfing', 'icon': '🟢', 'signal': 'bullish' if ctx_down else 'neutral',
+           'desc': 'Pichli red candle poori dhak gayi — strong bullish' if ctx_down else 'Downtrend ke bina weak signal'})
+    if c2 > o2 and c1 < o1 and o1 >= c2 * (1 - tol) and c1 <= o2 * (1 + tol) and body1 > body2:
+        P({'name': 'Bearish Engulfing', 'icon': '🔴', 'signal': 'bearish' if ctx_up else 'neutral',
+           'desc': 'Pichli green candle poori dhak gayi — strong bearish' if ctx_up else 'Uptrend ke bina weak signal'})
+
+    # Morning / Evening Star (3 candle): bada body, chhoti body (gap ke saath), phir bada ulta body jo pehli ke aadhe se aage jaye
+    if c3 < o3 and body2 <= 0.5 * body3 and max(o2, c2) <= c3 * (1 + tol) and c1 > o1 and c1 >= (o3 + c3) / 2 and ctx_down:
+        P({'name': 'Morning Star', 'icon': '🌅', 'signal': 'bullish', 'desc': 'Bullish reversal — 3-candle pattern'})
+    if c3 > o3 and body2 <= 0.5 * body3 and min(o2, c2) >= c3 * (1 - tol) and c1 < o1 and c1 <= (o3 + c3) / 2 and ctx_up:
+        P({'name': 'Evening Star', 'icon': '🌇', 'signal': 'bearish', 'desc': 'Bearish reversal — 3-candle pattern'})
+
+    # Gap-up Fade: gap-up khula par red band hua, upar lambi wick = resistance par rejection (engulfing nahi, par caution)
+    if c1 < o1 and o1 > c2 * 1.002 and uw >= 0.6 * body1 and body1 >= 0.25 * rng1:
+        P({'name': 'Gap-up Fade (rejection)', 'icon': '🔻', 'signal': 'bearish',
+           'desc': 'Gap-up ke baad bechne wale aaye (upar wick). Engulfing nahi hai, par caution — agli candle ka wait'})
+    return pats
+
+
 def _compute_technical(sym, fdata=None, mode='swing'):
     # mode: swing=daily 1Y (Day), positional=weekly 2Y (Week), longterm=monthly 5Y (Month)
     import math, statistics as _stats
@@ -285,27 +336,7 @@ def _compute_technical(sym, fdata=None, mode='swing'):
         rr_ratio=round((tgt1_v-entry)/risk,2); rr2=round((tgt2_v-entry)/risk,2)
         risk_pct=round(risk/entry*100,1) if entry else 0
 
-        patterns=[]
-        if n>=12 and o_arr is not None:
-            ctx_down=bool(c[-2]<c[-7]); ctx_up=bool(c[-2]>c[-7])   # pattern se pehle ka trend
-            top_zone=bool(pct_from_52h>=-10)
-            body=abs(c[-1]-o_arr[-1]); rng_c=h[-1]-l[-1]
-            if rng_c>0 and body/rng_c<0.1: patterns.append({'name':'Doji','icon':'⚖️','signal':'neutral','desc':'Indecision — wait for confirmation'})
-            lw=min(o_arr[-1],c[-1])-l[-1]; uw=h[-1]-max(o_arr[-1],c[-1])
-            if rng_c>0 and lw>2*body and uw<body:
-                if ctx_down and not top_zone: patterns.append({'name':'Hammer','icon':'🔨','signal':'bullish','desc':'Girawat ke baad — bullish reversal (confirmation chahiye)'})
-                elif top_zone: patterns.append({'name':'Hanging Man','icon':'⚠️','signal':'bearish','desc':'52W high ke paas — reversal warning, agli candle confirm kare'})
-                else: patterns.append({'name':'Hammer-like (weak context)','icon':'🔨','signal':'neutral','desc':'Support/downtrend context nahi — signal mat maano'})
-            if rng_c>0 and uw>2*body and lw<body:
-                if ctx_up: patterns.append({'name':'Shooting Star','icon':'⭐','signal':'bearish','desc':'Tezi ke baad — bearish reversal signal'})
-                else: patterns.append({'name':'Inverted Hammer-like','icon':'⭐','signal':'neutral','desc':'Uptrend context nahi — weak signal'})
-            pb=c[-2]-o_arr[-2]; cb=c[-1]-o_arr[-1]
-            if pb<0 and cb>0 and cb>abs(pb):
-                patterns.append({'name':'Bullish Engulfing','icon':'🟢','signal':'bullish' if ctx_down else 'neutral','desc':'Strong bullish signal' if ctx_down else 'Downtrend ke bina weak signal'})
-            if pb>0 and cb<0 and abs(cb)>pb:
-                patterns.append({'name':'Bearish Engulfing','icon':'🔴','signal':'bearish' if ctx_up else 'neutral','desc':'Strong bearish signal' if ctx_up else 'Uptrend ke bina weak signal'})
-            if c[-3]<o_arr[-3] and abs(c[-2]-o_arr[-2])<0.3*(h[-2]-l[-2]) and c[-1]>o_arr[-1] and ctx_down: patterns.append({'name':'Morning Star','icon':'🌅','signal':'bullish','desc':'Bullish reversal — 3-candle'})
-            if c[-3]>o_arr[-3] and abs(c[-2]-o_arr[-2])<0.3*(h[-2]-l[-2]) and c[-1]<o_arr[-1] and ctx_up: patterns.append({'name':'Evening Star','icon':'🌇','signal':'bearish','desc':'Bearish reversal — 3-candle'})
+        patterns=_detect_candles(o_arr,h,l,c,pct_from_52h)
         if not patterns: patterns.append({'name':'No Strong Pattern','icon':'➖','signal':'neutral','desc':'Neutral — no clear signal'})
 
         chart_patterns=[]
@@ -2223,12 +2254,31 @@ def _prev_day_levels(sym):
 
 
 # ── Sector Momentum ───────────────────────────────────────────────────────────
-SECTOR_YF = {   # naam: (yfinance ticker, app ka NSE index naam jo /api/index-stocks me chalta hai)
-    'Bank': ('^NSEBANK', 'NIFTY BANK'), 'IT': ('^CNXIT', 'NIFTY IT'), 'Auto': ('^CNXAUTO', 'NIFTY AUTO'),
-    'FMCG': ('^CNXFMCG', 'NIFTY FMCG'), 'Pharma': ('^CNXPHARMA', 'NIFTY PHARMA'), 'Metal': ('^CNXMETAL', 'NIFTY METAL'),
-    'Realty': ('^CNXREALTY', 'NIFTY REALTY'), 'Energy': ('^CNXENERGY', 'NIFTY ENERGY'),
-    'Infra': ('^CNXINFRA', 'NIFTY INFRASTRUCTURE'), 'Media': ('^CNXMEDIA', 'NIFTY MEDIA'),
-    'PSU Bank': ('^CNXPSUBANK', 'NIFTY PSU BANK'), 'Fin Services': ('NIFTY_FIN_SERVICE.NS', 'NIFTY FIN SERVICE'),
+SECTOR_YF = {   # naam: ([yfinance ticker candidates], app ka NSE index naam jo /api/index-stocks me chalta hai)
+    'Bank': (['^NSEBANK'], 'NIFTY BANK'),
+    'Pvt Bank': (['NIFTY_PVT_BANK.NS', 'NIFTYPVTBANK.NS'], 'NIFTY PVT BANK'),
+    'PSU Bank': (['^CNXPSUBANK'], 'NIFTY PSU BANK'),
+    'Fin Services': (['NIFTY_FIN_SERVICE.NS', '^CNXFIN'], 'NIFTY FIN SERVICE'),
+    'Capital Markets': (['NIFTY_CAPITAL_MKT.NS', 'NIFTY_CAPITAL_MARKETS.NS'], 'NIFTY CAPITAL MARKETS'),
+    'IT': (['^CNXIT'], 'NIFTY IT'),
+    'Auto': (['^CNXAUTO'], 'NIFTY AUTO'),
+    'FMCG': (['^CNXFMCG'], 'NIFTY FMCG'),
+    'Pharma': (['^CNXPHARMA'], 'NIFTY PHARMA'),
+    'Healthcare': (['NIFTY_HEALTHCARE.NS', 'NIFTY_HEALTHCARE_INDEX.NS'], 'NIFTY HEALTHCARE'),
+    'Metal': (['^CNXMETAL'], 'NIFTY METAL'),
+    'Realty': (['^CNXREALTY'], 'NIFTY REALTY'),
+    'Energy': (['^CNXENERGY'], 'NIFTY ENERGY'),
+    'Oil & Gas': (['NIFTY_OIL_AND_GAS.NS', 'NIFTY_OIL_GAS.NS'], 'NIFTY OIL AND GAS'),
+    'Infra': (['^CNXINFRA'], 'NIFTY INFRASTRUCTURE'),
+    'Media': (['^CNXMEDIA'], 'NIFTY MEDIA'),
+    'Consumer Durables': (['NIFTY_CONSR_DURBL.NS', 'NIFTY_CONSUMER_DURABLES.NS'], 'NIFTY CONSR DURBL'),
+    'Consumption': (['^CNXCONSUM'], 'NIFTY INDIA CONSUMPTION'),
+    'Chemicals': (['NIFTY_CHEMICALS.NS'], 'NIFTY CHEMICALS'),
+    'PSE (PSU)': (['^CNXPSE'], 'NIFTY PSE'),
+    'Commodities': (['^CNXCMDT'], 'NIFTY COMMODITIES'),
+    'Defence': (['NIFTY_INDIA_DEFENCE.NS'], 'NIFTY INDIA DEFENCE'),
+    'Midcap 100': (['^CNXMIDCAP', 'NIFTY_MIDCAP_100.NS'], 'NIFTY MIDCAP 100'),
+    'Smallcap 100': (['^CNXSC', 'NIFTYSMLCAP100.NS', 'NIFTY_SMLCAP_100.NS'], 'NIFTY SMLCAP 100'),
 }
 _sector_cache = {'ts': 0.0, 'data': None}
 
@@ -2239,6 +2289,25 @@ def _sector_series(ticker):
     if h is None or h.empty: return None
     if hasattr(h.columns, 'levels'): h.columns = h.columns.get_level_values(0)
     return h['Close'].dropna()
+
+
+def _nse_index_changes():
+    """NSE allIndices se {INDEX_SYMBOL: {r1d, r1m(30d), r1y}} — yfinance fail ho to limited fallback."""
+    out = {}
+    try:
+        NSE_SESSION.get("https://www.nseindia.com", timeout=8)
+        r = NSE_SESSION.get("https://www.nseindia.com/api/allIndices", timeout=12)
+        if r.status_code == 200:
+            def f(it, k):
+                try: return float(it.get(k))
+                except Exception: return None
+            for it in r.json().get('data', []):
+                nm = (it.get('indexSymbol') or it.get('index') or '').strip().upper()
+                if nm:
+                    out[nm] = {'r1d': f(it, 'percentChange'), 'r1m': f(it, 'perChange30d'), 'r1y': f(it, 'perChange365d')}
+    except Exception as ex:
+        print(f'[nse_index_changes] {ex}')
+    return out
 
 
 def _score_sector(name, close, bench):
@@ -2297,20 +2366,38 @@ def api_sector_momentum():
             return jsonify({'error': 'Nifty 50 ka data nahi mila'}), 502
 
         def work(it):
-            nm, (tk, idx) = it
-            try:
-                ser = _sector_series(tk)
-                r = _score_sector(nm, ser, bench) if ser is not None else None
-                if r: r['idx'] = idx
-                return (nm, r)
-            except Exception as ex:
-                print(f'[sector] {nm}: {ex}')
-                return (nm, None)
+            nm, (tks, idx) = it
+            for tk in tks:
+                try:
+                    ser = _sector_series(tk)
+                    if ser is None or len(ser) < 70: continue
+                    r = _score_sector(nm, ser, bench)
+                    if r:
+                        r['idx'] = idx; r['src'] = tk
+                        return (nm, r)
+                except Exception as ex:
+                    print(f'[sector] {nm} {tk}: {ex}')
+            return (nm, None)
 
         with ThreadPoolExecutor(max_workers=6) as ex:
             res = list(ex.map(work, list(SECTOR_YF.items())))
         rows = [r for _, r in res if r]
         missing = [nm for nm, r in res if not r]
+        # yfinance se na mile to NSE allIndices se limited data (1D / 1M / 1Y)
+        if missing:
+            chg = _nse_index_changes(); nf = chg.get('NIFTY 50') or {}
+            still = []
+            for nm in missing:
+                idx = SECTOR_YF[nm][1]; d = chg.get(idx.upper())
+                if d and d.get('r1m') is not None and nf.get('r1m') is not None:
+                    rows.append({'name': nm, 'idx': idx, 'cat': 'limited', 'score': 0, 'limited': True,
+                                 'why': 'Sirf NSE ka 1M/1Y data mila — trend/DMA analysis nahi hua',
+                                 'r1d': d.get('r1d'), 'r1m': d.get('r1m'), 'r1y': d.get('r1y'),
+                                 'rs1m': round(d['r1m'] - nf['r1m'], 2),
+                                 'rs1y': round(d['r1y'] - nf['r1y'], 2) if d.get('r1y') is not None and nf.get('r1y') is not None else None})
+                else:
+                    still.append(nm)
+            missing = still
         rows.sort(key=lambda r: r['score'], reverse=True)
         out = {'rows': rows, 'missing': missing,
                'updated': (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).strftime('%d %b %H:%M IST'),
