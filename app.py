@@ -166,6 +166,15 @@ def _calc_returns(close, live=None):
     out['MAX'] = pct(float(s_.iloc[0]))
     return out
 
+def _swing_highs(h, k=3, lookback=250):
+    """Asli swing highs (local maxima) — pivot formula nahi. k candle dono taraf se chhota ho to swing high."""
+    n = len(h); out = []
+    for i in range(max(k, n - lookback), n - k):
+        w = [float(x) for x in h[i - k:i + k + 1]]
+        if float(h[i]) == max(w): out.append(float(h[i]))
+    return out
+
+
 def _detect_candles(o, h, l, c, pct_from_52h):
     """Candlestick patterns — strict geometry + trend context. Day/Week/Month teeno me yahi chalta hai."""
     pats = []
@@ -323,18 +332,23 @@ def _compute_technical(sym, fdata=None, mode='swing'):
         if pct_from_52h>=-3 and cur<high52:                 # 52W high ke paas: breakout entry maano
             entry=round(high52*1.002,2); entry_type='breakout'
         sl_v=min(swing_low-0.25*atr, entry-1.0*atr)          # kam se kam 1 ATR ka room
-        max_risk=min(3.0*atr, 0.30*entry)
+        max_risk=min(2.0*atr, 0.25*entry)
         sl_v=max(sl_v, entry-max_risk)                       # bahut door SL nahi
         risk=max(entry-sl_v,1e-9)
-        if entry_type=='breakout': res=[]                    # 52W high ke upar asli resistance nahi (pivot noise hai) -> 2R
+        if entry_type=='breakout': res=[]                    # 52W high ke upar asli resistance nahi -> 2R
         else:
-            res=[x for x in (r1,r2) if x and x>entry*1.005]
+            kk={'swing':8,'positional':4}.get(mode,3)            # mazboot swing high: dono taraf kk candles se upar
+            res=[x for x in _swing_highs(h,k=kk) if x>entry+0.75*atr]   # noise (0.75 ATR ke andar) ignore
             if high52>entry*1.005: res.append(high52)
         tgt1_v=min(res) if res else entry+2*risk             # resistance nahi = price discovery, 2R
         tgt2_v=max(entry+3*risk, tgt1_v+atr)
         sl_atr=round(sl_v,2); tgt1_atr=round(tgt1_v,2); tgt2_atr=round(tgt2_v,2)
         rr_ratio=round((tgt1_v-entry)/risk,2); rr2=round((tgt2_v-entry)/risk,2)
         risk_pct=round(risk/entry*100,1) if entry else 0
+        # Pullback par R:R kya banega (EMA20 / pivot zone ka mid)
+        zl_=[x for x in (e20,pivot) if x and x<cur*0.995 and x>sl_v]
+        pb_entry=round(sum(zl_)/len(zl_),2) if zl_ else None
+        rr_pb=round((tgt1_v-pb_entry)/(pb_entry-sl_v),2) if (pb_entry and tgt1_v>pb_entry and pb_entry>sl_v) else None
 
         patterns=_detect_candles(o_arr,h,l,c,pct_from_52h)
         if not patterns: patterns.append({'name':'No Strong Pattern','icon':'➖','signal':'neutral','desc':'Neutral — no clear signal'})
@@ -381,16 +395,28 @@ def _compute_technical(sym, fdata=None, mode='swing'):
         elif score>=60: verdict="✅ BUY with Caution"; vtype="buy"; vreason=f"Technical score {score}/100 — Decent setup. Volume aur S/R confirm karo."
         elif score>=45: verdict="⏳ WAIT / WATCH"; vtype="wait"; vreason=f"Technical score {score}/100 — Mixed signals. Breakout ka wait karo."
         else: verdict="❌ AVOID for Now"; vtype="avoid"; vreason=f"Technical score {score}/100 — Weak momentum."
-        # Extended / low R:R ho to 'STRONG BUY' mat dikhao (chase se bachao)
-        extended=bool(rsi_val>70 and (bb_pct>95 or pct_from_52h>=-3))
-        if vtype in ('strong_buy','buy') and (extended or rr_ratio<1.5):
-            why=[]
-            if extended: why.append(f"RSI {rsi_val} + price upper Bollinger/52W high ke paas (extended)")
-            if rr_ratio<1.5: why.append(f"R:R sirf {rr_ratio}:1")
+        # Extended ya low R:R: alag-alag label (pehle sab "EXTENDED" dikhta tha)
+        extended=bool((rsi_val>70 and (bb_pct>95 or pct_from_52h>=-3)) or (atr>0 and (cur-e20)/atr>3.5))
+        if vtype in ('strong_buy','buy'):
             zl=[x for x in (e20,pivot) if x and x<cur]
             zone=f" Pullback zone: Rs {min(zl)} - Rs {max(zl)}." if zl else ""
-            verdict="⏳ STRONG TREND — EXTENDED, pullback ka wait"; vtype="wait"
-            vreason=f"Trend mazboot (score {score}/100), par " + "; ".join(why) + "." + zone + " Ya breakout retest par entry dekho."
+            if extended:
+                why=[]
+                if rsi_val>70: why.append(f"RSI {rsi_val}")
+                if bb_pct>95: why.append("price upper Bollinger par")
+                if pct_from_52h>=-3: why.append("52W high ke bilkul paas")
+                if atr>0 and (cur-e20)/atr>3.5: why.append(f"EMA20 se {round((cur-e20)/atr,1)} ATR upar")
+                verdict="⏳ STRONG TREND — EXTENDED, pullback ka wait"; vtype="wait"
+                vreason=f"Trend mazboot (score {score}/100), par " + ", ".join(why) + " (extended)." + zone + " Ya breakout retest par entry dekho."
+            elif rr_ratio<1.5:
+                dist=round((tgt1_v/entry-1)*100,1)
+                if rr_pb and rr_pb>=2: tail=f" Pullback (~Rs {pb_entry}) par R:R ~{rr_pb}:1 ban sakta hai."
+                else: tail=" Resistance ke upar close (breakout) ya pullback ka wait karo."
+                verdict="🟡 TREND ACCHA — par R:R kam, entry ka wait"; vtype="wait"
+                vreason=f"Score {score}/100 achha hai, par nearest resistance Rs {tgt1_atr} sirf {dist}% door hai aur risk {risk_pct}% — R:R {rr_ratio}:1." + tail
+            elif vtype=='strong_buy' and rr_ratio<2:
+                verdict="✅ BUY — R:R theek, par STRONG nahi"; vtype="buy"
+                vreason=f"Score {score}/100, R:R {rr_ratio}:1. Position size chhota rakho; pullback par R:R behtar hoga."
 
         # Valuation
         pe=fd.get('pe')
@@ -413,7 +439,7 @@ def _compute_technical(sym, fdata=None, mode='swing'):
 
         chart_label=f"{len(price_history)} " + {'swing':'din','positional':'hafte','longterm':'mahine'}.get(mode,'din')
 
-        return _clean_dict({'rsi':rsi_val,'macd':macd_val,'signal':signal_val,'macd_cross':macd_cross,'ema20':e20,'ema50':e50,'ema200':e200,'ema_align':ema_align,'cur':round(cur,2),'bb_upper':bb_upper,'bb_lower':bb_lower,'bb_mid':bb_mid,'bb_pct':bb_pct,'atr':atr,'atr_pct':atr_pct,'vol_ratio':vol_ratio,'vol_surge':vol_surge,'pivot':pivot,'r1':r1,'r2':r2,'s1':s1,'s2':s2,'high52':high52,'low52':low52,'pct_from_52h':pct_from_52h,'sl':sl_atr,'tgt1':tgt1_atr,'tgt2':tgt2_atr,'rr':rr_ratio,'rr2':rr2,'entry':round(entry,2),'entry_type':entry_type,'risk_pct':risk_pct,'price_note':price_note,'chart_label':chart_label,'vol_partial':bool(partial_frac<1.0),'patterns':patterns,'chart_patterns':chart_patterns,'score':score,'reasons_bull':rb,'reasons_bear':bear,'verdict':verdict,'verdict_type':vtype,'verdict_reason':vreason,'val_label':val_label,'val_type':val_type,'price_history':price_history,'returns':returns})
+        return _clean_dict({'rsi':rsi_val,'macd':macd_val,'signal':signal_val,'macd_cross':macd_cross,'ema20':e20,'ema50':e50,'ema200':e200,'ema_align':ema_align,'cur':round(cur,2),'bb_upper':bb_upper,'bb_lower':bb_lower,'bb_mid':bb_mid,'bb_pct':bb_pct,'atr':atr,'atr_pct':atr_pct,'vol_ratio':vol_ratio,'vol_surge':vol_surge,'pivot':pivot,'r1':r1,'r2':r2,'s1':s1,'s2':s2,'high52':high52,'low52':low52,'pct_from_52h':pct_from_52h,'sl':sl_atr,'tgt1':tgt1_atr,'tgt2':tgt2_atr,'rr':rr_ratio,'rr2':rr2,'rr_pb':rr_pb,'pb_entry':pb_entry,'entry':round(entry,2),'entry_type':entry_type,'risk_pct':risk_pct,'price_note':price_note,'chart_label':chart_label,'vol_partial':bool(partial_frac<1.0),'patterns':patterns,'chart_patterns':chart_patterns,'score':score,'reasons_bull':rb,'reasons_bear':bear,'verdict':verdict,'verdict_type':vtype,'verdict_reason':vreason,'val_label':val_label,'val_type':val_type,'price_history':price_history,'returns':returns})
     except Exception as ex:
         import traceback; traceback.print_exc()
         return {'error':str(ex)}
