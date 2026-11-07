@@ -769,7 +769,7 @@ async function renderTechnical(mode) {
       <div class="tech-card">
         <div class="tc-label">R:R Ratio</div>
         <div class="tc-val" style="color:${r.rr >= 1.5 ? 'var(--green)' : 'var(--yellow)'}">${r.rr}:1</div>
-        <div class="tc-sub">${r.rr >= 2 ? '✅ Good R:R' : r.rr >= 1.5 ? '🟡 OK R:R' : '⚠️ Low R:R — is entry par reward kam'}</div>
+        <div class="tc-sub">${r.rr >= 2 ? '✅ Good R:R' : r.rr >= 1.5 ? '🟡 OK R:R' : '⚠️ Low R:R — is entry par reward kam'}${r.rr_pb ? '<br>Pullback ~₹' + r.pb_entry + ' par R:R ' + r.rr_pb + ':1' : ''}</div>
       </div>
     </div>`;
 
