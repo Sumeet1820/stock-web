@@ -2142,8 +2142,13 @@ async function loadIpo() {
   try {
     const res  = await fetch('/api/ipo');
     const ipos = await res.json();
+    if (ipos && ipos.loading) {
+      cont.innerHTML = '<div class="loading-box">⏳ IPO data fetch ho raha hai (pehli baar 30-60 sec lagte hain)... apne aap retry hoga</div>';
+      setTimeout(loadIpo, 8000); return;
+    }
     if (!ipos || ipos.error || !ipos.length) {
-      cont.innerHTML = '<div class="loading-box">⚠️ IPO data nahi mila</div>';
+      const why = ipos && ipos.error ? escHTML(ipos.error) : 'khali list';
+      cont.innerHTML = '<div class="loading-box">⚠️ IPO data nahi mila<br><small style="opacity:.7">' + why + '</small></div>';
       return;
     }
     cont.innerHTML = ipos.map(ipo => {
@@ -2354,8 +2359,13 @@ async function loadIpo() {
   try {
     const res  = await fetch('/api/ipo');
     ipoAllData = await res.json();
-    if (!ipoAllData || ipoAllData.error) {
-      document.getElementById('ipo-list-scroll').innerHTML = '<div class="loading-box">⚠️ IPO data nahi mila</div>';
+    if (ipoAllData && ipoAllData.loading) {
+      document.getElementById('ipo-list-scroll').innerHTML = '<div class="loading-box">⏳ IPO data fetch ho raha hai (pehli baar 30-60 sec)...<br><small style="opacity:.7">apne aap retry hoga</small></div>';
+      setTimeout(() => { if (document.getElementById('ipo-list-scroll')) loadIpo(); }, 8000); return;
+    }
+    if (!ipoAllData || ipoAllData.error || !Array.isArray(ipoAllData) || !ipoAllData.length) {
+      const why = ipoAllData && ipoAllData.error ? escHTML(ipoAllData.error) : 'khali list';
+      document.getElementById('ipo-list-scroll').innerHTML = '<div class="loading-box">⚠️ IPO data nahi mila<br><small style="opacity:.7">' + why + '</small></div>';
       return;
     }
     renderIpoList(ipoAllData);
