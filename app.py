@@ -488,6 +488,76 @@ def _calc_ipo_score(ipo):
     else: reasons.append(f"❓ Registrar: {ipo.get('registrar','') or 'Unknown'}")
     return min(score,10), reasons
 
+def _nse_ipo_rows(today, have_names, cutoff):
+    """NSE ke IPO endpoints (Current / Upcoming / Past) se rows banao. ipowatch fail ho to ye fallback hai.
+    NSE ke exact field names mujhe pakke nahi pata, isliye flexible keys use hote hain aur pehli row ke keys diag me jaate hain."""
+    import datetime as _dt, re as _re
+    rows = []
+    def pick(d, *ks):
+        for k in ks:
+            v = d.get(k)
+            if v not in (None, '', [], {}): return v
+        return ''
+    def parse_d(v):
+        v = str(v or '').strip()
+        for fmt in ('%d-%b-%Y', '%d %b %Y', '%d-%B-%Y', '%d %B %Y', '%d-%m-%Y', '%Y-%m-%d', '%d/%m/%Y', '%d-%b-%y', '%d-%b-%Y %H:%M:%S'):
+            try: return _dt.datetime.strptime(v, fmt).date()
+            except Exception: pass
+        return None
+    def nums(txt): return [float(x) for x in _re.findall(r'\d+(?:\.\d+)?', str(txt).replace(',', ''))]
+    def norm(n): return _re.sub(r'[^a-z0-9]', '', (n or '').lower())
+    try:
+        NSE_SESSION.get("https://www.nseindia.com", timeout=8)
+        NSE_SESSION.get("https://www.nseindia.com/market-data/all-upcoming-issues-ipo", timeout=6)
+    except Exception as ex:
+        _ipo_diag.append({'url': 'nse warmup', 'error': repr(ex)[:100]})
+    endpoints = [('current', 'https://www.nseindia.com/api/ipo-current-issue'),
+                 ('upcoming', 'https://www.nseindia.com/api/all-upcoming-issues?category=ipo'),
+                 ('past', 'https://www.nseindia.com/api/public-past-issues')]
+    seen = set(have_names)
+    for tag, url in endpoints:
+        try:
+            r = NSE_SESSION.get(url, timeout=12)
+            _ipo_diag.append({'url': 'nse ' + tag, 'status': r.status_code, 'bytes': len(r.content)})
+            if r.status_code != 200: continue
+            js = r.json()
+            items = js if isinstance(js, list) else (js.get('data') or js.get('Table') or js.get('items') or [])
+            if not items: continue
+            _ipo_diag.append({'nse_' + tag + '_count': len(items), 'nse_' + tag + '_keys': list(items[0].keys())[:25]})
+            for it in items:
+                if not isinstance(it, dict): continue
+                name = str(pick(it, 'companyName', 'company', 'name', 'Company Name', 'issuerName')).strip()
+                if not name or norm(name) in seen: continue
+                sym = str(pick(it, 'symbol', 'Symbol')).strip()
+                od = parse_d(pick(it, 'issueStartDate', 'openDate', 'issueOpenDate', 'Issue Start Date', 'biddingStartDate'))
+                cd = parse_d(pick(it, 'issueEndDate', 'closeDate', 'issueCloseDate', 'Issue End Date', 'biddingEndDate'))
+                if cd and cd < cutoff: continue                      # bahut purana
+                if od and cd:
+                    status = 'Open' if od <= today <= cd else ('Closed' if today > cd else 'Upcoming')
+                else:
+                    st = str(pick(it, 'status', 'Status')).lower()
+                    status = 'Open' if st in ('active', 'open') else ('Closed' if 'clos' in st else 'Upcoming')
+                if tag == 'past' and status != 'Closed': status = 'Closed'
+                ptxt = str(pick(it, 'issuePrice', 'priceBand', 'price', 'Issue Price', 'priceRange')).strip()
+                pn = nums(ptxt); price_num = max(pn) if pn else 0
+                sz = nums(pick(it, 'issueSize', 'Issue Size', 'totalIssueSize')); issue_size = None
+                if sz:
+                    issue_size = sz[0] / 1e7 if sz[0] > 1e6 else sz[0]
+                ser = str(pick(it, 'series', 'securityType', 'Security type', 'Security Type')).lower()
+                category = 'SME' if ('sm' == ser or 'sme' in ser or 'emerge' in ser) else 'Mainboard'
+                sub = pick(it, 'noOfTime', 'subscription')
+                try: sub = round(float(sub), 2) if sub not in ('', None) and float(sub) > 0 else None
+                except Exception: sub = None
+                rows.append({'company': name, 'symbol': sym, 'status': status, 'price_band': ptxt, 'price_num': price_num,
+                             'open_date': od.strftime('%d %b %Y') if od else '', 'close_date': cd.strftime('%d %b %Y') if cd else '',
+                             'issue_size': issue_size, 'lot_size': 0, 'subscription': sub, 'registrar': '', 'category': category,
+                             'gmp': None, 'detail_url': '', 'source': 'NSE'})
+                seen.add(norm(name))
+        except Exception as ex:
+            _ipo_diag.append({'url': 'nse ' + tag, 'error': repr(ex)[:110]})
+    return rows
+
+
 def _fetch_ipo_data_internal():
     import datetime as _dt
     today=_dt.date.today(); cutoff=today-_dt.timedelta(days=60)
@@ -636,6 +706,14 @@ def _fetch_ipo_data_internal():
         try: days=(_dt.datetime.strptime(x['open_date'],'%d %b %Y').date()-today).days
         except: days=999
         return (base,days)
+    # ── NSE fallback/merge: ipowatch fail ho ya koi IPO miss ho to NSE ki list se jodo ──
+    try:
+        _have = [re.sub(r'[^a-z0-9]', '', (x.get('company') or '').lower()) for x in ipos]
+        _nse_rows = _nse_ipo_rows(today, _have, cutoff)
+        if _nse_rows: ipos.extend(_nse_rows)
+        _ipo_diag.append({'ipowatch_rows': len(_have), 'nse_added': len(_nse_rows)})
+    except Exception as ex:
+        _ipo_diag.append({'nse_fallback_error': repr(ex)[:120]})
     ipos.sort(key=_sort_key)
 
     # ── NSE API: subscription (noOfTime) for current IPOs ────────────────────
