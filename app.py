@@ -492,8 +492,16 @@ def _fetch_ipo_data_internal():
     import datetime as _dt
     today=_dt.date.today(); cutoff=today-_dt.timedelta(days=60)
     HEADERS={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0','Accept':'text/html,*/*;q=0.9','Referer':'https://www.google.com/'}
+    _ipo_diag.clear()
     def _sess():
-        s=_req.Session(); s.headers.update(HEADERS); return s
+        s=_req.Session(); s.headers.update(HEADERS)
+        _orig_get=s.get
+        def _get(url,**kw):
+            try:
+                r=_orig_get(url,**kw); _ipo_diag.append({'url':url[:70],'status':r.status_code,'bytes':len(r.content)}); return r
+            except Exception as ex:
+                _ipo_diag.append({'url':url[:70],'error':repr(ex)[:110]}); raise
+        s.get=_get; return s
     from bs4 import BeautifulSoup
     ipos=[]
     def _parse_date(date_txt):
@@ -635,6 +643,7 @@ def _fetch_ipo_data_internal():
         NSE_SESSION.get("https://www.nseindia.com", timeout=8)
         NSE_SESSION.get("https://www.nseindia.com/market-data/all-upcoming-issues-ipo", timeout=6)
         rn = NSE_SESSION.get("https://www.nseindia.com/api/ipo-current-issue", timeout=10)
+        _ipo_diag.append({'url':'nse ipo-current-issue','status':rn.status_code})
         if rn.status_code == 200:
             nse_items = rn.json()
             if isinstance(nse_items, dict): nse_items = nse_items.get('data', [])
@@ -2012,6 +2021,8 @@ _IPO_TTL = 15 * 60          # itne second tak data fresh maana jayega
 _ipo_cache = {'data': None, 'ts': 0.0}
 _ipo_lock = threading.Lock()
 _ipo_refreshing = False
+_ipo_diag = []
+_ipo_state = {'last_error': None, 'last_try': 0.0, 'last_count': None}
 
 def _ipo_load_disk():
     try:
@@ -2023,22 +2034,27 @@ def _ipo_load_disk():
         print(f'[IPO cache load] {ex}')
 
 def _ipo_refresh():
-    """Fresh data fetch karke cache me daalo. Fail/empty ho to purana cache rakho."""
+    """Fresh data fetch karke cache me daalo. Fail/empty ho to purana cache rakho, aur wajah yaad rakho."""
     global _ipo_refreshing
     with _ipo_lock:
         if _ipo_refreshing: return False
         _ipo_refreshing = True
     try:
+        _ipo_state['last_try'] = time.time()
         data = _fetch_ipo_data_internal()
+        _ipo_state['last_count'] = len(data) if data else 0
         if data:
             _ipo_cache.update(data=data, ts=time.time())
+            _ipo_state['last_error'] = None
             try:
                 with open(_IPO_CACHE_FILE, 'w', encoding='utf-8') as f:
                     json.dump({'data': data, 'ts': _ipo_cache['ts']}, f, ensure_ascii=False)
             except Exception as ex:
                 print(f'[IPO cache save] {ex}')
             return True
+        _ipo_state['last_error'] = 'Sources se koi IPO nahi mila (site block hui ya layout badla)'
     except Exception as ex:
+        _ipo_state['last_error'] = repr(ex)[:200]
         print(f'[IPO refresh] {ex}')
     finally:
         _ipo_refreshing = False
@@ -2046,25 +2062,33 @@ def _ipo_refresh():
 
 @app.route('/api/ipo')
 def api_ipo():
+    """Kabhi bhi lamba block nahi karta (gunicorn timeout se bachne ke liye): cache turant, warna {'loading':True} ya error+wajah."""
     try:
         force = request.args.get('refresh') == '1'
         age = time.time() - _ipo_cache['ts']
-        if _ipo_cache['data'] and not force:
-            # Cache hai -> turant do. Purana ho gaya to background me update karo.
-            if age > _IPO_TTL and not _ipo_refreshing:
-                threading.Thread(target=_ipo_refresh, daemon=True).start()
-            return jsonify(_ipo_cache['data'])
-        # Cache nahi (pehli baar) ya force refresh -> wait karke fetch
-        if _ipo_refreshing and not force:
-            for _ in range(90):                     # max ~90s wait agar warm-up chal raha ho
-                time.sleep(1)
-                if _ipo_cache['data']: return jsonify(_ipo_cache['data'])
-        _ipo_refresh()
-        if _ipo_cache['data']: return jsonify(_ipo_cache['data'])
-        return jsonify({'error': 'IPO data fetch nahi ho paya'}), 500
+        stale = (not _ipo_cache['data']) or age > _IPO_TTL or force
+        started = False
+        retry_ok = (time.time() - _ipo_state['last_try'] > 60) or force
+        if stale and not _ipo_refreshing and retry_ok:
+            threading.Thread(target=_ipo_refresh, daemon=True).start(); started = True
+        if _ipo_cache['data']:
+            return jsonify(_ipo_cache['data'])              # purana ho to bhi turant; background me update
+        if started or _ipo_refreshing or _ipo_state['last_try'] == 0:
+            return jsonify({'loading': True}), 202
+        return jsonify({'error': _ipo_state['last_error'] or 'IPO data fetch nahi ho paya', 'diag': list(_ipo_diag)[-8:]}), 500
     except Exception as e:
         import traceback; traceback.print_exc()
-        return jsonify({'error':str(e)}),500
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/debug-ipo')
+def api_debug_ipo():
+    """Debug: IPO scraping ko seedha chalao aur dikhao kaunsa source kya de raha hai (30-60 sec lag sakte hain)."""
+    try:
+        data = _fetch_ipo_data_internal()
+        return jsonify({'count': len(data or []), 'diag': list(_ipo_diag), 'state': _ipo_state,
+                        'cache_has_data': bool(_ipo_cache['data']), 'sample': (data or [])[:2]})
+    except Exception as e:
+        import traceback; return jsonify({'error': repr(e), 'diag': list(_ipo_diag), 'trace': traceback.format_exc()[-600:]}), 500
 
 @app.route('/api/watchlist',methods=['GET'])
 def api_watchlist_get():
