@@ -1630,6 +1630,62 @@ CHARTINK_CUSTOM = {
 }
 _chartink_clause_cache = {}
 
+# Tumhari Chartink 'My Screeners' ke asli naam. Pattern wale scans me ^7106(...)^ Chartink ka custom function hai
+# (pattern_json me values screen ke Y-coordinates hain: chhota number = upar). Login/cookie chahiye ho sakta hai.
+_CHARTINK_NEW = {
+    'ci-vcp-setup-2': {
+        'label': '🔷 VCP SETUP 2',
+        'color': '#60a5fa',
+        'scan_clause': "( {cash} (  daily ^7106('source'=' daily close','max_bars'='80','min_bars'='22','pattern_json'='[90,245,308,315,262,174,157,251,251,151,149,215,214,188,149]','match_threshold'='0.15','resample_points'='15','output'='flag_match')^ =  1 and  daily close >  daily ema(  daily close , 200 ) and  daily ema(  daily close , 50 ) >  daily ema(  daily close , 200 ) ) )",
+    },
+    'ci-bull-flag-perfect': {
+        'label': '🚩 BULL FLAG Perfect',
+        'color': '#34d399',
+        'scan_clause': "( {cash} (  daily ^7106('source'=' daily close','max_bars'='80','min_bars'='22','pattern_json'='[325,285,240,187,136,94,88,84,83,85,89,96,102,106,110]','match_threshold'='0.15','resample_points'='15','output'='flag_match')^ =  1 and  daily close >  daily sma(  daily close , 50 ) ) )",
+    },
+    'ci-retracement': {
+        'label': '↩️ Retracement',
+        'color': '#fbbf24',
+        'scan_clause': "( {cash} (  daily ^7106('source'=' daily close','max_bars'='80','min_bars'='22','pattern_json'='[310,228,231,259,294,377,340,328,171,154,34,25,90,143,143]','match_threshold'='0.15','resample_points'='15','output'='flag_match')^ =  1 and  daily close >  daily sma(  daily close , 50 ) ) )",
+    },
+    'ci-bull-flag': {
+        'label': '🚩 Bull Flag',
+        'color': '#4ade80',
+        'scan_clause': "( {cash} (  daily ^7106('source'=' daily close','max_bars'='80','min_bars'='22','pattern_json'='[302,215,127,112,134,147,141,136,152,169,169,161,149,130,110]','match_threshold'='0.15','resample_points'='15','output'='flag_match')^ =  1 and(  1 day ago max( 8 ,  daily high ) -  1 day ago min( 8 ,  daily low ) ) /  daily close <  0.08 and  daily close >  daily ema(  daily close , 20 ) and  daily close >  daily ema(  daily close , 50 ) ) )",
+    },
+    'ci-cup-and-handle': {
+        'label': '☕ Cup And Handle',
+        'color': '#fb923c',
+        'scan_clause': "( {cash} (  daily ^7106('source'=' daily close','max_bars'='80','min_bars'='22','pattern_json'='[130,152,183,241,276,287,281,270,216,168,142,146,179,171,149]','match_threshold'='0.15','resample_points'='15','output'='flag_match')^ =  1 and  weekly close >  weekly sma(  daily close , 30 ) ) )",
+    },
+    'ci-range-breakout': {
+        'label': '📦 Range Break Out',
+        'color': '#a78bfa',
+        'scan_clause': "( {cash} (  daily ^7106('source'=' daily close','max_bars'='80','min_bars'='22','pattern_json'='[155,199,243,227,180,163,207,251,213,174,185,221,234,201,168]','match_threshold'='0.15','resample_points'='15','output'='flag_match')^ =  1 and  daily close >  daily ema(  daily close , 50 ) and  weekly close >  weekly sma(  daily close , 30 ) and(  1 day ago max( 40 ,  daily high ) -  1 day ago min( 40 ,  daily low ) ) /  daily close <  0.15 ) )",
+    },
+    'ci-inverted-hns': {
+        'label': '🔄 Inverted Head and Shoulder',
+        'color': '#f472b6',
+        'scan_clause': "( {cash} (  daily ^7106('source'=' daily close','max_bars'='80','min_bars'='22','pattern_json'='[162,195,227,213,174,171,237,302,239,176,177,210,222,192,162]','match_threshold'='0.15','resample_points'='15','output'='flag_match')^ =  1 and  daily max( 120 ,  daily high ) >  daily close *  1.2 and  daily close >  daily ema(  daily close , 20 ) and  daily rsi( 14 ) >  50 and  daily macd line( 26 , 12 , 9 ) >  daily macd signal( 26 , 12 , 9 ) ) )",
+    },
+    'ci-double-bottom': {
+        'label': '〰️ Double Bottom',
+        'color': '#22d3ee',
+        'scan_clause': "( {cash} (  daily ^7106('source'=' daily close','max_bars'='80','min_bars'='22','pattern_json'='[130,175,221,267,265,217,168,120,165,210,254,259,225,190,155]','match_threshold'='0.15','resample_points'='15','output'='flag_match')^ =  1 and  weekly close >  weekly sma(  daily close , 30 ) and  daily rsi( 14 ) >  45 and  daily close >  daily supertrend( 10 , 3 ) ) )",
+    },
+    'ci-bollinger-wm': {
+        'label': '🎯 Bollinger Bands (Weekly + Monthly)',
+        'color': '#c084fc',
+        'scan_clause': '( {cash} ( ( {cash} ( ( {cash} (  weekly low <=  weekly sma(  daily close , 20 ) and  weekly high >=  weekly sma(  daily close , 20 ) and  daily low <=  daily lower bollinger band( 20 , 2 ) and  daily high >=  daily lower bollinger band( 20 , 2 ) ) ) or( {cash} (  weekly low <=  weekly sma(  daily close , 20 ) and  weekly high >=  weekly sma(  daily close , 20 ) and  monthly low <=  monthly lower bollinger band( 20 , 2 ) and  monthly high >=  monthly lower bollinger band( 20 , 2 ) ) ) ) ) ) )',
+    },
+    'ci-ipo-base': {
+        'label': '🆕 IPO Base - Stockexploder',
+        'color': '#38bdf8',
+        'scan_clause': '( {cash} ( ( {cash} ( ( {cash} not(  daily sma(  daily close , 400 ) >  0 ) ) and( {cash} (  daily close >  50 and  daily volume >  100000 ) ) ) ) ) )',
+    },
+}
+CHARTINK_CUSTOM = {**_CHARTINK_NEW, **CHARTINK_CUSTOM}          # pattern scans list me pehle dikhen
+
 def _chartink_run_clause(scan_clause, timeout=25):
     """Chartink ke /screener/process ko seedha scan_clause bhejo. Rows ko app ke format me do."""
     import re as _re
@@ -1637,6 +1693,12 @@ def _chartink_run_clause(scan_clause, timeout=25):
     ses = _rq.Session()
     ses.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
                         'Accept-Language': 'en-US,en;q=0.9'})
+    ck = os.environ.get('CHARTINK_COOKIE', '').strip()          # optional: browser se copy ki hui Cookie string (login chahiye wale scans ke liye)
+    if ck:
+        for part in ck.split(';'):
+            if '=' in part:
+                k_, v_ = part.split('=', 1)
+                ses.cookies.set(k_.strip(), v_.strip(), domain='chartink.com')
     page = ses.get('https://chartink.com/screener/', timeout=timeout)
     m = _re.search(r'name="csrf-token"\s+content="([^"]+)"', page.text) or _re.search(r'content="([^"]+)"\s+name="csrf-token"', page.text)
     if not m:
