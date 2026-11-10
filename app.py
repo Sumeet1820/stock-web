@@ -483,7 +483,7 @@ def _calc_ipo_score(ipo):
     if issue_size>=500: score+=1; reasons.append(f"✅ Issue ≥ 500Cr")
     elif issue_size>=100: reasons.append(f"⚠️ Issue ₹{issue_size:.0f}Cr")
     else: reasons.append("❌ Small issue size")
-    if any(r in registrar for r in ['link intime','kfintech','bigshare','skyline','cameo']):
+    if any(r in registrar for r in ['intime','kfin','bigshare','skyline','cameo']):
         score+=1; reasons.append(f"✅ Reputed Registrar")
     else: reasons.append(f"❓ Registrar: {ipo.get('registrar','') or 'Unknown'}")
     return min(score,10), reasons
@@ -558,6 +558,98 @@ def _nse_ipo_rows(today, have_names, cutoff):
     return rows
 
 
+def _upstox_ipo_rows(today, cutoff):
+    """Upstox Developer API se IPO rows: GET /v2/ipos (list) + GET /v2/ipos/{id} (details).
+    Token na ho / expire ho / koi dikkat aaye to None return karta hai -> caller purane scrapers par fallback karta hai.
+    NOTE: Upstox GMP (grey market premium) nahi deta; wo ipowatch se hi aata rahega."""
+    import datetime as _dt, concurrent.futures as _cf
+    if not _upstox_token:
+        _ipo_diag.append({'upstox_ipo': 'skipped - token set nahi hai'}); return None
+    URL = 'https://api.upstox.com/v2/ipos'
+
+    def _d(v):
+        try: return _dt.datetime.strptime(str(v)[:10], '%Y-%m-%d').date()
+        except Exception: return None
+    def _fmt(d): return d.strftime('%d %b %Y') if d else ''
+    def _f(v, default=0.0):
+        try: return float(v)
+        except Exception: return default
+
+    # ── 1. List: open / upcoming / closed / listed (paginated, max 30 per page) ──
+    keep = []; seen_ids = set()
+    for st, max_pages in (('open', 2), ('upcoming', 2), ('closed', 2), ('listed', 3)):
+        page = 1
+        while page <= max_pages:
+            r = _req.get(URL, params={'status': st, 'page_number': page, 'records': 30},
+                         headers=_upstox_headers(), timeout=12)
+            _ipo_diag.append({'url': f'upstox ipos {st} p{page}', 'status': r.status_code, 'bytes': len(r.content)})
+            if r.status_code in (401, 403):
+                _ipo_diag.append({'upstox_ipo': 'auth fail - token expire/invalid, dobara login karo', 'body': r.text[:120]})
+                return None
+            if r.status_code != 200: break          # 429 / 5xx etc. -> is status ko chhodo
+            js = r.json() or {}
+            items = [x for x in (js.get('data') or []) if isinstance(x, dict) and x.get('id')]
+            if page == 1 and items:                 # ordering verify karne ke liye diag
+                _ipo_diag.append({f'upstox_{st}_first_end': items[0].get('bidding_end_date'),
+                                  f'upstox_{st}_last_end': items[-1].get('bidding_end_date'),
+                                  f'upstox_{st}_total': ((js.get('meta_data') or {}).get('page') or {}).get('total_records')})
+            for it in items:
+                if it['id'] in seen_ids: continue
+                cd = _d(it.get('bidding_end_date'))
+                if st in ('closed', 'listed') and (cd is None or cd < cutoff): continue   # bahut purana
+                seen_ids.add(it['id']); keep.append((st, it))
+            tp = ((js.get('meta_data') or {}).get('page') or {}).get('total_pages') or 1
+            if page >= tp: break
+            page += 1
+    if not keep:
+        _ipo_diag.append({'upstox_ipo': 'list khali aayi'}); return None
+
+    # ── 2. Har IPO ki details (lot size, registrar, timeline, subscription) ──
+    def _detail(it):
+        try:
+            rr = _req.get(f"{URL}/{it['id']}", headers=_upstox_headers(), timeout=12)
+            if rr.status_code == 200: return (rr.json() or {}).get('data') or {}
+            _ipo_diag.append({'upstox_detail_fail': it['id'], 'status': rr.status_code})
+        except Exception as ex:
+            _ipo_diag.append({'upstox_detail_err': it['id'], 'err': repr(ex)[:80]})
+        return {}
+    with _cf.ThreadPoolExecutor(max_workers=5) as ex:
+        details = list(ex.map(_detail, [it for _, it in keep]))
+
+    # ── 3. Apne app ke existing row-format me map karo ──
+    rows = []
+    for (st, it), det in zip(keep, details):
+        d = {**it, **det}                                   # detail ko priority
+        name = (d.get('name') or '').strip()
+        if not name: continue
+        od = _d(d.get('bidding_start_date')); cd = _d(d.get('bidding_end_date'))
+        tl = d.get('timeline') or {}; reg = d.get('registrar_info') or {}
+        lo = _f(d.get('minimum_price')); hi = _f(d.get('maximum_price'))
+        if hi > 0: price_txt = f"\u20b9{hi:g}" if (lo <= 0 or lo == hi) else f"\u20b9{lo:g}-{hi:g}"
+        else:      price_txt = ''                           # price band abhi announce nahi
+        sub = _f(d.get('total_subscription'))
+        rows.append({
+            'company': name, 'symbol': d.get('symbol') or '',
+            'status': {'open': 'Open', 'upcoming': 'Upcoming'}.get(st, 'Closed'),   # closed + listed -> 'Closed' (purane behaviour jaisa)
+            'price_band': price_txt, 'price_num': hi,
+            'open_date': _fmt(od), 'close_date': _fmt(cd),
+            'issue_size': _f(d.get('issue_size')) or None,
+            'lot_size': int(_f(d.get('lot_size'))),
+            'subscription': round(sub, 2) if sub > 0 else None,
+            'registrar': (reg.get('name') or '').strip(),
+            'category': 'Mainboard' if d.get('issue_type') == 'regular' else 'SME',
+            'gmp': None, 'detail_url': '', 'source': 'Upstox',
+            'est_listing': _fmt(_d(tl.get('listing_date'))),
+            # extra fields (frontend chahe to use kare)
+            'upstox_status': st, 'upstox_id': d.get('id'), 'isin': d.get('isin'), 'industry': d.get('industry'),
+            'min_qty': d.get('minimum_quantity'), 'allotment_date': _fmt(_d(tl.get('allotment_date'))),
+            'listing_price': d.get('listing_price'), 'listing_exchange': d.get('listing_exchange'),
+            'prospectus_url': d.get('rhp_url') or d.get('drhp_url'),
+        })
+    _ipo_diag.append({'upstox_ipo_rows': len(rows)})
+    return rows or None
+
+
 def _fetch_ipo_data_internal():
     import datetime as _dt
     today=_dt.date.today(); cutoff=today-_dt.timedelta(days=60)
@@ -598,53 +690,60 @@ def _fetch_ipo_data_internal():
         except: pass
         return open_s,close_s,status,close_obj
 
-    try:
-        r=_sess().get("https://ipowatch.in/upcoming-ipo-list/",timeout=18)
-        if r.status_code==200:
-            soup=BeautifulSoup(r.text,'html.parser')
-            for tbl in soup.select('table'):
-                ths=[th.get_text(strip=True) for th in tbl.select('th')]
-                ths_lower=[h.lower() for h in ths]
-                if not any(w in ' '.join(ths_lower) for w in ['ipo','stock','company','date']): continue
-                ci={'name':0,'date':1,'size':2,'price':3,'type':-1}
-                for i,h in enumerate(ths_lower):
-                    if 'company' in h or 'stock' in h: ci['name']=i
-                    elif 'date' in h: ci['date']=i
-                    elif 'size' in h: ci['size']=i
-                    elif 'price' in h or 'band' in h: ci['price']=i
-                    elif 'type' in h: ci['type']=i
-                for row in tbl.select('tr')[1:]:
-                    tds=row.select('td')
-                    if len(tds)<3: continue
-                    def _cell(k,fb=0):
-                        idx=ci.get(k,fb); return tds[idx].get_text(strip=True) if idx>=0 and idx<len(tds) else ''
-                    name=_cell('name',0)
-                    if not name or len(name)<2: continue
-                    det_url=''; ni=ci.get('name',0)
-                    if ni<len(tds):
-                        a=tds[ni].find('a')
-                        if a and a.get('href'):
-                            h2=a['href']; det_url=h2 if h2.startswith('http') else 'https://ipowatch.in'+h2
-                    date_txt=_cell('date',1); type_txt=_cell('type',-1) if ci.get('type',-1)>=0 else ''
-                    size_txt=_cell('size',2); price_txt=_cell('price',3)
-                    open_s,close_s,status,close_obj=_parse_date(date_txt)
-                    if status=='Closed' and close_obj and close_obj<cutoff: continue
-                    price_num=0
-                    try:
-                        pb=price_txt.replace('₹','').replace(',','').replace(' to ','-').replace('to','-')
-                        parts=[p.strip() for p in pb.split('-') if p.strip()]
-                        price_num=float(parts[-1]) if parts else 0
-                    except: pass
-                    issue_size=0
-                    try:
-                        st=size_txt.replace('₹','').replace(',','').replace('Cr.','').replace('Cr','').strip()
-                        m4=re.search(r'[\d.]+',st)
-                        if m4: issue_size=float(m4.group())
-                    except: pass
-                    category='SME' if (type_txt and 'sme' in type_txt.lower()) or (not type_txt and issue_size and issue_size<250) else 'Mainboard'
-                    ipos.append({'company':name.strip(),'symbol':'','status':status,'price_band':price_txt,'price_num':price_num,'open_date':open_s,'close_date':close_s,'issue_size':issue_size,'lot_size':0,'subscription':None,'registrar':'','category':category,'gmp':None,'detail_url':det_url})
-                if ipos: break
-    except Exception as ex: print(f"[ipo-list] {ex}")
+    # ── Upstox API primary source; fail ho to neeche purane scrapers (ipowatch/NSE) chalenge ──
+    _up_rows = None
+    try: _up_rows = _upstox_ipo_rows(today, cutoff)
+    except Exception as ex: _ipo_diag.append({'upstox_ipo_error': repr(ex)[:140]})
+    if _up_rows:
+        ipos.extend(_up_rows)
+    else:
+        try:
+            r=_sess().get("https://ipowatch.in/upcoming-ipo-list/",timeout=18)
+            if r.status_code==200:
+                soup=BeautifulSoup(r.text,'html.parser')
+                for tbl in soup.select('table'):
+                    ths=[th.get_text(strip=True) for th in tbl.select('th')]
+                    ths_lower=[h.lower() for h in ths]
+                    if not any(w in ' '.join(ths_lower) for w in ['ipo','stock','company','date']): continue
+                    ci={'name':0,'date':1,'size':2,'price':3,'type':-1}
+                    for i,h in enumerate(ths_lower):
+                        if 'company' in h or 'stock' in h: ci['name']=i
+                        elif 'date' in h: ci['date']=i
+                        elif 'size' in h: ci['size']=i
+                        elif 'price' in h or 'band' in h: ci['price']=i
+                        elif 'type' in h: ci['type']=i
+                    for row in tbl.select('tr')[1:]:
+                        tds=row.select('td')
+                        if len(tds)<3: continue
+                        def _cell(k,fb=0):
+                            idx=ci.get(k,fb); return tds[idx].get_text(strip=True) if idx>=0 and idx<len(tds) else ''
+                        name=_cell('name',0)
+                        if not name or len(name)<2: continue
+                        det_url=''; ni=ci.get('name',0)
+                        if ni<len(tds):
+                            a=tds[ni].find('a')
+                            if a and a.get('href'):
+                                h2=a['href']; det_url=h2 if h2.startswith('http') else 'https://ipowatch.in'+h2
+                        date_txt=_cell('date',1); type_txt=_cell('type',-1) if ci.get('type',-1)>=0 else ''
+                        size_txt=_cell('size',2); price_txt=_cell('price',3)
+                        open_s,close_s,status,close_obj=_parse_date(date_txt)
+                        if status=='Closed' and close_obj and close_obj<cutoff: continue
+                        price_num=0
+                        try:
+                            pb=price_txt.replace('₹','').replace(',','').replace(' to ','-').replace('to','-')
+                            parts=[p.strip() for p in pb.split('-') if p.strip()]
+                            price_num=float(parts[-1]) if parts else 0
+                        except: pass
+                        issue_size=0
+                        try:
+                            st=size_txt.replace('₹','').replace(',','').replace('Cr.','').replace('Cr','').strip()
+                            m4=re.search(r'[\d.]+',st)
+                            if m4: issue_size=float(m4.group())
+                        except: pass
+                        category='SME' if (type_txt and 'sme' in type_txt.lower()) or (not type_txt and issue_size and issue_size<250) else 'Mainboard'
+                        ipos.append({'company':name.strip(),'symbol':'','status':status,'price_band':price_txt,'price_num':price_num,'open_date':open_s,'close_date':close_s,'issue_size':issue_size,'lot_size':0,'subscription':None,'registrar':'','category':category,'gmp':None,'detail_url':det_url})
+                    if ipos: break
+        except Exception as ex: print(f"[ipo-list] {ex}")
 
     gmp_map={}
     try:
@@ -707,49 +806,51 @@ def _fetch_ipo_data_internal():
         except: days=999
         return (base,days)
     # ── NSE fallback/merge: ipowatch fail ho ya koi IPO miss ho to NSE ki list se jodo ──
-    try:
-        _have = [re.sub(r'[^a-z0-9]', '', (x.get('company') or '').lower()) for x in ipos]
-        _nse_rows = _nse_ipo_rows(today, _have, cutoff)
-        if _nse_rows: ipos.extend(_nse_rows)
-        _ipo_diag.append({'ipowatch_rows': len(_have), 'nse_added': len(_nse_rows)})
-    except Exception as ex:
-        _ipo_diag.append({'nse_fallback_error': repr(ex)[:120]})
+    if not _up_rows:   # Upstox se data aaya ho to dusre source se merge nahi (duplicate names se bachne ke liye)
+        try:
+            _have = [re.sub(r'[^a-z0-9]', '', (x.get('company') or '').lower()) for x in ipos]
+            _nse_rows = _nse_ipo_rows(today, _have, cutoff)
+            if _nse_rows: ipos.extend(_nse_rows)
+            _ipo_diag.append({'ipowatch_rows': len(_have), 'nse_added': len(_nse_rows)})
+        except Exception as ex:
+            _ipo_diag.append({'nse_fallback_error': repr(ex)[:120]})
     ipos.sort(key=_sort_key)
 
     # ── NSE API: subscription (noOfTime) for current IPOs ────────────────────
-    try:
-        NSE_SESSION.get("https://www.nseindia.com", timeout=8)
-        NSE_SESSION.get("https://www.nseindia.com/market-data/all-upcoming-issues-ipo", timeout=6)
-        rn = NSE_SESSION.get("https://www.nseindia.com/api/ipo-current-issue", timeout=10)
-        _ipo_diag.append({'url':'nse ipo-current-issue','status':rn.status_code})
-        if rn.status_code == 200:
-            nse_items = rn.json()
-            if isinstance(nse_items, dict): nse_items = nse_items.get('data', [])
-            # Build map: company_name_lower → {symbol, noOfTime}
-            nse_map = {}
-            for ni in (nse_items or []):
-                cname = (ni.get('companyName') or '').lower().strip()
-                sym_n = ni.get('symbol','')
-                sub_t = ni.get('noOfTime')
-                try: sub_t = float(sub_t) if sub_t else None
-                except: sub_t = None
-                if cname: nse_map[cname] = {'symbol': sym_n, 'sub': sub_t}
-            # Fuzzy match IPOs to NSE data
-            for ipo in ipos:
-                nl = ipo['company'].lower().strip()
-                match = None
-                if nl in nse_map: match = nse_map[nl]
-                else:
-                    words = [w for w in nl.split() if len(w) > 3]
-                    for k, v in nse_map.items():
-                        if any(w in k for w in words):
-                            match = v; break
-                if match:
-                    if not ipo.get('symbol') and match.get('symbol'):
-                        ipo['symbol'] = match['symbol']
-                    if not ipo.get('subscription') and match.get('sub') and match['sub'] > 0:
-                        ipo['subscription'] = round(match['sub'], 2)
-    except Exception as ex: print(f"[nse-sub] {ex}")
+    if not _up_rows:   # Upstox ka total_subscription already aa chuka hai
+        try:
+            NSE_SESSION.get("https://www.nseindia.com", timeout=8)
+            NSE_SESSION.get("https://www.nseindia.com/market-data/all-upcoming-issues-ipo", timeout=6)
+            rn = NSE_SESSION.get("https://www.nseindia.com/api/ipo-current-issue", timeout=10)
+            _ipo_diag.append({'url':'nse ipo-current-issue','status':rn.status_code})
+            if rn.status_code == 200:
+                nse_items = rn.json()
+                if isinstance(nse_items, dict): nse_items = nse_items.get('data', [])
+                # Build map: company_name_lower → {symbol, noOfTime}
+                nse_map = {}
+                for ni in (nse_items or []):
+                    cname = (ni.get('companyName') or '').lower().strip()
+                    sym_n = ni.get('symbol','')
+                    sub_t = ni.get('noOfTime')
+                    try: sub_t = float(sub_t) if sub_t else None
+                    except: sub_t = None
+                    if cname: nse_map[cname] = {'symbol': sym_n, 'sub': sub_t}
+                # Fuzzy match IPOs to NSE data
+                for ipo in ipos:
+                    nl = ipo['company'].lower().strip()
+                    match = None
+                    if nl in nse_map: match = nse_map[nl]
+                    else:
+                        words = [w for w in nl.split() if len(w) > 3]
+                        for k, v in nse_map.items():
+                            if any(w in k for w in words):
+                                match = v; break
+                    if match:
+                        if not ipo.get('symbol') and match.get('symbol'):
+                            ipo['symbol'] = match['symbol']
+                        if not ipo.get('subscription') and match.get('sub') and match['sub'] > 0:
+                            ipo['subscription'] = round(match['sub'], 2)
+        except Exception as ex: print(f"[nse-sub] {ex}")
 
     # ── Detail page fetch: lot_size, registrar, subscription, gmp ────────────
     from bs4 import BeautifulSoup as _BS
@@ -840,7 +941,7 @@ def _fetch_ipo_data_internal():
     # Fetch details for all IPOs (parallel threads)
     import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
-        list(ex.map(_fetch_detail, ipos))
+        list(ex.map(_fetch_detail, [i for i in ipos if i.get('source') != 'Upstox']))   # Upstox rows me details already hain
 
     for ipo in ipos:
         score,reasons=_calc_ipo_score(ipo)
@@ -2163,7 +2264,8 @@ def api_debug_ipo():
     """Debug: IPO scraping ko seedha chalao aur dikhao kaunsa source kya de raha hai (30-60 sec lag sakte hain)."""
     try:
         data = _fetch_ipo_data_internal()
-        return jsonify({'count': len(data or []), 'diag': list(_ipo_diag), 'state': _ipo_state,
+        return jsonify({'count': len(data or []), 'upstox_token_set': bool(_upstox_token), 'sources': sorted({(x.get('source') or 'ipowatch') for x in (data or [])}),
+                        'diag': list(_ipo_diag), 'state': _ipo_state,
                         'cache_has_data': bool(_ipo_cache['data']), 'sample': (data or [])[:2]})
     except Exception as e:
         import traceback; return jsonify({'error': repr(e), 'diag': list(_ipo_diag), 'trace': traceback.format_exc()[-600:]}), 500
@@ -2228,171 +2330,6 @@ def api_trades_del(sym,idx):
         if not trades: ud.get('trades',{}).pop(sym,None)
         _save_user_data(ud); return jsonify({'ok':True})
     return jsonify({'error':'not found'}),404
-
-# ── Telegram alerts (server-side: browser band ho tab bhi alert aata hai) ─────────────────────────────
-# Setup: Telegram me @BotFather se bot banao -> token ko Render env me TELEGRAM_BOT_TOKEN naam se daalo.
-# Phir app me "📨 Telegram" panel se Connect karo. (Optional: single-user ke liye env TELEGRAM_CHAT_ID)
-_TG_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
-ALERT_WORKER_ON = os.environ.get('ALERT_WORKER', '1') != '0'
-_tg_bot_username = {'v': None}
-
-def _tg_api(method, payload=None, timeout=12):
-    import requests as _rq
-    r = _rq.post(f'https://api.telegram.org/bot{_TG_TOKEN}/{method}', json=payload or {}, timeout=timeout)
-    return r.json()
-
-def _tg_send(chat_id, text):
-    if not _TG_TOKEN or not chat_id: return False
-    try:
-        js = _tg_api('sendMessage', {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML', 'disable_web_page_preview': True})
-        if not js.get('ok'): print(f"[telegram] sendMessage fail: {str(js)[:160]}")
-        return bool(js.get('ok'))
-    except Exception as ex:
-        print(f'[telegram] {ex}'); return False
-
-def _alert_text(a, ltp):
-    import html as _h
-    ico = {'target': '🎯', 'stoploss': '🛑'}.get(a.get('type'), '🔔')
-    sign = '≥' if a.get('cond', 'above') == 'above' else '≤'
-    ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
-    note = f"\n📝 {_h.escape(str(a.get('note')))}" if a.get('note') else ''
-    return (f"{ico} <b>{_h.escape(a['sym'])}</b> alert hit!\n"
-            f"LTP: <b>₹{ltp:,.2f}</b>  ({sign} ₹{float(a['price']):,.2f})\n"
-            f"Type: {a.get('type', 'price')}{note}\n⏰ {ist.strftime('%d %b, %H:%M')} IST")
-
-def _tg_notify_user(ud, a, ltp):
-    """Is user ko Telegram bhejo (agar connected ho aur pehle nahi bheja). True = bheja gaya."""
-    if a.get('tg_sent'): return False
-    chat = ud.get('telegram_chat_id') or os.environ.get('TELEGRAM_CHAT_ID', '').strip()
-    if _tg_send(chat, _alert_text(a, float(ltp))):
-        a['tg_sent'] = True; return True
-    return False
-
-def _market_open_ist():
-    ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
-    return ist.weekday() < 5 and (9, 10) <= (ist.hour, ist.minute) <= (15, 35)
-
-def _alert_prices(syms):
-    """{SYMBOL: ltp}. Pehle Upstox, na mile to yfinance (delay ke saath)."""
-    out = {}
-    try:
-        for it in _get_prices_upstox(list(syms)):
-            if it.get('ltp'): out[it['symbol']] = float(it['ltp'])
-    except Exception as ex:
-        print(f'[alerts] upstox price: {ex}')
-    missing = [x for x in syms if x not in out][:15]
-    if missing:
-        try:
-            import yfinance as yf
-            idxm = {'NIFTY': '^NSEI', 'BANKNIFTY': '^NSEBANK', 'FINNIFTY': 'NIFTY_FIN_SERVICE.NS', 'SENSEX': '^BSESN'}
-            for sym in missing:
-                try:
-                    p = yf.Ticker(idxm.get(sym, f'{sym}.NS')).fast_info['last_price']
-                    if p and float(p) > 0: out[sym] = float(p)
-                except Exception: pass
-        except Exception as ex:
-            print(f'[alerts] yf price: {ex}')
-    return out
-
-def _check_alerts_once():
-    """Sab users ke active alerts check karo. Hit hone par mark + Telegram. Kitne fire hue wo return karta hai."""
-    import glob
-    files = glob.glob(os.path.join(BASE, 'userdata_*.json'))
-    pending, syms = {}, set()
-    for p in files:
-        try:
-            with open(p, 'r', encoding='utf-8') as f: ud = json.load(f)
-        except Exception: continue
-        act = [a for a in ud.get('trade_alerts', []) if not a.get('triggered') and a.get('sym')]
-        if act:
-            pending[p] = [a['id'] for a in act]; syms.update(a['sym'] for a in act)
-    if not syms: return 0
-    prices = _alert_prices(sorted(syms))
-    fired = 0
-    for p in pending:
-        try:
-            with open(p, 'r', encoding='utf-8') as f: ud = json.load(f)       # dobara padho (beech me change hua ho sakta hai)
-        except Exception: continue
-        changed = False
-        for a in ud.get('trade_alerts', []):
-            if a.get('triggered') or a.get('id') not in pending[p]: continue
-            ltp = prices.get(a['sym'])
-            if not ltp: continue
-            hit = (ltp >= float(a['price'])) if a.get('cond', 'above') == 'above' else (ltp <= float(a['price']))
-            if hit:
-                a['triggered'] = True; a['triggered_at'] = ltp; a['triggered_time'] = datetime.datetime.now().isoformat()
-                _tg_notify_user(ud, a, ltp); changed = True; fired += 1
-        if changed:
-            try:
-                with open(p, 'w', encoding='utf-8') as f: json.dump(ud, f, ensure_ascii=False)
-            except Exception as ex: print(f'[alerts] save {p}: {ex}')
-    return fired
-
-def _alert_worker():
-    time.sleep(40)
-    while True:
-        try:
-            if _market_open_ist(): _check_alerts_once()
-        except Exception as ex:
-            print(f'[alerts] worker: {ex}')
-        time.sleep(30)
-
-@app.route('/api/telegram/status')
-def api_tg_status():
-    ud = _user_data()
-    return jsonify({'bot_configured': bool(_TG_TOKEN), 'connected': bool(ud.get('telegram_chat_id') or os.environ.get('TELEGRAM_CHAT_ID')),
-                    'worker': ALERT_WORKER_ON, 'market_open': _market_open_ist()})
-
-@app.route('/api/telegram/link', methods=['POST'])
-def api_tg_link():
-    """Ek baar ka code + bot ka t.me link. User link kholkar Start dabata hai."""
-    if not _TG_TOKEN: return jsonify({'error': 'TELEGRAM_BOT_TOKEN set nahi hai (server env)'}), 400
-    try:
-        if not _tg_bot_username['v']:
-            me = _tg_api('getMe')
-            if not me.get('ok'): return jsonify({'error': 'Bot token galat hai'}), 400
-            _tg_bot_username['v'] = me['result']['username']
-        code = secrets.token_hex(4)
-        ud = _user_data(); ud['tg_code'] = code; _save_user_data(ud)
-        return jsonify({'ok': True, 'code': code, 'url': f"https://t.me/{_tg_bot_username['v']}?start={code}"})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/telegram/connect', methods=['POST'])
-def api_tg_connect():
-    """Bot ko bheje gaye '/start <code>' se chat id dhundo aur save karo."""
-    if not _TG_TOKEN: return jsonify({'error': 'TELEGRAM_BOT_TOKEN set nahi hai (server env)'}), 400
-    ud = _user_data(); code = ud.get('tg_code')
-    body = request.get_json(silent=True) or {}
-    chat_id = str(body.get('chat_id') or '').strip()                # manual chat id bhi chalega
-    try:
-        if not chat_id:
-            if not code: return jsonify({'error': 'Pehle "Link banao" dabao'}), 400
-            js = _tg_api('getUpdates', {'limit': 100})
-            for u in reversed(js.get('result', [])):
-                m = u.get('message') or {}
-                if (m.get('text') or '').strip() == f'/start {code}':
-                    chat_id = str(m['chat']['id']); break
-        if not chat_id:
-            return jsonify({'error': 'Abhi tak bot ko Start nahi mila. Link kholkar Telegram me Start dabao, phir dobara Connect dabao.'}), 404
-        ud['telegram_chat_id'] = chat_id; ud.pop('tg_code', None); _save_user_data(ud)
-        ok = _tg_send(chat_id, '✅ <b>StockPro alerts connected!</b>\nAb tumhare price alerts yahan aayenge.')
-        return jsonify({'ok': ok, 'connected': True})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/telegram/test', methods=['POST'])
-def api_tg_test():
-    ud = _user_data()
-    chat = ud.get('telegram_chat_id') or os.environ.get('TELEGRAM_CHAT_ID', '').strip()
-    if not chat: return jsonify({'error': 'Telegram connect nahi hai'}), 400
-    ok = _tg_send(chat, '🔔 <b>Test alert</b>\nStockPro se Telegram notification sahi chal raha hai ✅')
-    return jsonify({'ok': ok})
-
-@app.route('/api/telegram/disconnect', methods=['POST'])
-def api_tg_disconnect():
-    ud = _user_data(); ud.pop('telegram_chat_id', None); _save_user_data(ud)
-    return jsonify({'ok': True})
 
 # ── Trade Alerts (server-side persistent) ────────────────────────────────────
 @app.route('/api/trade_alerts', methods=['GET'])
@@ -2466,9 +2403,6 @@ def api_trade_alerts_trigger(alert_id):
             a['triggered'] = True
             a['triggered_at'] = ltp
             a['triggered_time'] = datetime.datetime.now().isoformat()
-            try:
-                if ltp is not None: _tg_notify_user(ud, a, ltp)
-            except Exception as ex: print(f'[alerts] tg notify: {ex}')
             _save_user_data(ud)
             return jsonify({'ok': True})
     return jsonify({'ok': False, 'reason': 'not found or already triggered'})# ── User data sync API ────────────────────────────────────────────────────────
@@ -3771,10 +3705,6 @@ if os.environ.get('RENDER_EXTERNAL_URL'):
 
 from events_module import register_events
 register_events(app, NSE_SESSION, _login_required, _user_data)
-
-# Server-side price alert checker (market hours me har 30 sec). Band karna ho: env ALERT_WORKER=0
-if ALERT_WORKER_ON:
-    threading.Thread(target=_alert_worker, daemon=True).start()
 
 # IPO cache: disk se turant load, aur background me fresh data fetch (user ko wait na karna pade)
 _ipo_load_disk()
