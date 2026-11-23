@@ -1180,6 +1180,44 @@ def api_fno_stocks():
         stocks = [s for s in stocks if q in s]
     return jsonify(stocks)
 
+# ── Screener.in rate-limit (HTTP 429 "Too many requests") se bachav ─────────────────────────────────
+# Pehle error page ka heading hi company ka naam ban jata tha. Ab: throttle + retry + cache (+ purana data fallback).
+_scr_lock = threading.Lock()
+_scr_last = {'t': 0.0}
+_scr_cache = {}                      # url -> (time, data)
+_SCR_MIN_GAP = 1.2                   # do Screener requests ke beech kam se kam itne second
+
+def _screener_limited(d):
+    """True agar Screener ne block/limit wala page diya ho ya data khali ho."""
+    if not d or not isinstance(d, dict): return True
+    nm = str(d.get('name') or d.get('company') or '').strip().lower()
+    return any(x in nm for x in ('too many requests', 'rate limit', 'access denied', 'just a moment', 'service unavailable', 'forbidden'))
+
+def _fetch_stock_safe(url, ttl=900):
+    """(data, state): state = 'cache' | 'fresh' | 'stale' (limit ke time purana data) | 'limited' (data None)."""
+    import copy as _copy
+    c = _scr_cache.get(url)
+    if c and time.time() - c[0] < ttl:
+        return _copy.deepcopy(c[1]), 'cache'
+    for wait in (0, 3, 8):                              # 429 par 3s aur 8s ruk kar dobara
+        if wait: time.sleep(wait)
+        with _scr_lock:
+            gap = _SCR_MIN_GAP - (time.time() - _scr_last['t'])
+            if gap > 0: time.sleep(gap)
+            _scr_last['t'] = time.time()
+        try: d = fetch_stock(url)
+        except Exception as ex:
+            print(f'[screener] {url}: {ex}'); d = None
+        if not _screener_limited(d):
+            if len(_scr_cache) > 300: _scr_cache.clear()
+            _scr_cache[url] = (time.time(), d)
+            return _copy.deepcopy(d), 'fresh'
+        print(f'[screener] rate-limited/khali: {url}')
+    if c: return _copy.deepcopy(c[1]), 'stale'
+    return None, 'limited'
+
+_SCR_LIMIT_MSG = 'Screener.in ne abhi rate-limit laga diya (Too many requests). 1-2 minute baad dobara try karo.'
+
 @app.route('/api/analyze')
 def api_analyze():
     url=request.args.get('url','').strip(); sym=request.args.get('sym','').strip().upper()
@@ -1188,10 +1226,16 @@ def api_analyze():
         # Handle relative URLs from screener search results
         if url and url.startswith('/'):
             url = 'https://www.screener.in' + url
-        if url: data=fetch_stock(url)
+        if url: data, _st = _fetch_stock_safe(url)
         else:
-            data=fetch_stock(f"https://www.screener.in/company/{sym}/consolidated/")
-            if not data.get('market_cap'): data=fetch_stock(f"https://www.screener.in/company/{sym}/")
+            data, _st = _fetch_stock_safe(f"https://www.screener.in/company/{sym}/consolidated/")
+            if data is not None and not data.get('market_cap'):
+                _d2, _st2 = _fetch_stock_safe(f"https://www.screener.in/company/{sym}/")
+                if _d2 is not None: data, _st = _d2, _st2
+        if data is None:
+            return jsonify({'error': _SCR_LIMIT_MSG, 'rate_limited': True}), 429
+        if _st == 'stale':
+            data['stale'] = True; data['stale_note'] = 'Screener rate-limit: purana data dikh raha hai'
         symbol=data.get('nse_symbol') or sym
         nse={}
         if symbol:
@@ -1230,7 +1274,9 @@ def api_direct(sym):
                     if sym in (r.get('name','') or '').upper(): url=r['url']; break
             if not url: url=res[0].get('url','')
         if url:
-            data=fetch_stock(f"https://www.screener.in{url}")
+            data, _st = _fetch_stock_safe(f"https://www.screener.in{url}")
+            if data is None:
+                return jsonify({'error': _SCR_LIMIT_MSG, 'rate_limited': True}), 429
             nse=fetch_nse_live(sym)
             data['nse']=nse
             data['checklist']={t:_evaluate_checklist(data,t) for t in ['swing','positional','longterm']}
@@ -2331,6 +2377,171 @@ def api_trades_del(sym,idx):
         _save_user_data(ud); return jsonify({'ok':True})
     return jsonify({'error':'not found'}),404
 
+# ── Telegram alerts (server-side: browser band ho tab bhi alert aata hai) ─────────────────────────────
+# Setup: Telegram me @BotFather se bot banao -> token ko Render env me TELEGRAM_BOT_TOKEN naam se daalo.
+# Phir app me "📨 Telegram" panel se Connect karo. (Optional: single-user ke liye env TELEGRAM_CHAT_ID)
+_TG_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
+ALERT_WORKER_ON = os.environ.get('ALERT_WORKER', '1') != '0'
+_tg_bot_username = {'v': None}
+
+def _tg_api(method, payload=None, timeout=12):
+    import requests as _rq
+    r = _rq.post(f'https://api.telegram.org/bot{_TG_TOKEN}/{method}', json=payload or {}, timeout=timeout)
+    return r.json()
+
+def _tg_send(chat_id, text):
+    if not _TG_TOKEN or not chat_id: return False
+    try:
+        js = _tg_api('sendMessage', {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML', 'disable_web_page_preview': True})
+        if not js.get('ok'): print(f"[telegram] sendMessage fail: {str(js)[:160]}")
+        return bool(js.get('ok'))
+    except Exception as ex:
+        print(f'[telegram] {ex}'); return False
+
+def _alert_text(a, ltp):
+    import html as _h
+    ico = {'target': '🎯', 'stoploss': '🛑'}.get(a.get('type'), '🔔')
+    sign = '≥' if a.get('cond', 'above') == 'above' else '≤'
+    ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+    note = f"\n📝 {_h.escape(str(a.get('note')))}" if a.get('note') else ''
+    return (f"{ico} <b>{_h.escape(a['sym'])}</b> alert hit!\n"
+            f"LTP: <b>₹{ltp:,.2f}</b>  ({sign} ₹{float(a['price']):,.2f})\n"
+            f"Type: {a.get('type', 'price')}{note}\n⏰ {ist.strftime('%d %b, %H:%M')} IST")
+
+def _tg_notify_user(ud, a, ltp):
+    """Is user ko Telegram bhejo (agar connected ho aur pehle nahi bheja). True = bheja gaya."""
+    if a.get('tg_sent'): return False
+    chat = ud.get('telegram_chat_id') or os.environ.get('TELEGRAM_CHAT_ID', '').strip()
+    if _tg_send(chat, _alert_text(a, float(ltp))):
+        a['tg_sent'] = True; return True
+    return False
+
+def _market_open_ist():
+    ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+    return ist.weekday() < 5 and (9, 10) <= (ist.hour, ist.minute) <= (15, 35)
+
+def _alert_prices(syms):
+    """{SYMBOL: ltp}. Pehle Upstox, na mile to yfinance (delay ke saath)."""
+    out = {}
+    try:
+        for it in _get_prices_upstox(list(syms)):
+            if it.get('ltp'): out[it['symbol']] = float(it['ltp'])
+    except Exception as ex:
+        print(f'[alerts] upstox price: {ex}')
+    missing = [x for x in syms if x not in out][:15]
+    if missing:
+        try:
+            import yfinance as yf
+            idxm = {'NIFTY': '^NSEI', 'BANKNIFTY': '^NSEBANK', 'FINNIFTY': 'NIFTY_FIN_SERVICE.NS', 'SENSEX': '^BSESN'}
+            for sym in missing:
+                try:
+                    p = yf.Ticker(idxm.get(sym, f'{sym}.NS')).fast_info['last_price']
+                    if p and float(p) > 0: out[sym] = float(p)
+                except Exception: pass
+        except Exception as ex:
+            print(f'[alerts] yf price: {ex}')
+    return out
+
+def _check_alerts_once():
+    """Sab users ke active alerts check karo. Hit hone par mark + Telegram. Kitne fire hue wo return karta hai."""
+    import glob
+    files = glob.glob(os.path.join(BASE, 'userdata_*.json'))
+    pending, syms = {}, set()
+    for p in files:
+        try:
+            with open(p, 'r', encoding='utf-8') as f: ud = json.load(f)
+        except Exception: continue
+        act = [a for a in ud.get('trade_alerts', []) if not a.get('triggered') and a.get('sym')]
+        if act:
+            pending[p] = [a['id'] for a in act]; syms.update(a['sym'] for a in act)
+    if not syms: return 0
+    prices = _alert_prices(sorted(syms))
+    fired = 0
+    for p in pending:
+        try:
+            with open(p, 'r', encoding='utf-8') as f: ud = json.load(f)       # dobara padho (beech me change hua ho sakta hai)
+        except Exception: continue
+        changed = False
+        for a in ud.get('trade_alerts', []):
+            if a.get('triggered') or a.get('id') not in pending[p]: continue
+            ltp = prices.get(a['sym'])
+            if not ltp: continue
+            hit = (ltp >= float(a['price'])) if a.get('cond', 'above') == 'above' else (ltp <= float(a['price']))
+            if hit:
+                a['triggered'] = True; a['triggered_at'] = ltp; a['triggered_time'] = datetime.datetime.now().isoformat()
+                _tg_notify_user(ud, a, ltp); changed = True; fired += 1
+        if changed:
+            try:
+                with open(p, 'w', encoding='utf-8') as f: json.dump(ud, f, ensure_ascii=False)
+            except Exception as ex: print(f'[alerts] save {p}: {ex}')
+    return fired
+
+def _alert_worker():
+    time.sleep(40)
+    while True:
+        try:
+            if _market_open_ist(): _check_alerts_once()
+        except Exception as ex:
+            print(f'[alerts] worker: {ex}')
+        time.sleep(30)
+
+@app.route('/api/telegram/status')
+def api_tg_status():
+    ud = _user_data()
+    return jsonify({'bot_configured': bool(_TG_TOKEN), 'connected': bool(ud.get('telegram_chat_id') or os.environ.get('TELEGRAM_CHAT_ID')),
+                    'worker': ALERT_WORKER_ON, 'market_open': _market_open_ist()})
+
+@app.route('/api/telegram/link', methods=['POST'])
+def api_tg_link():
+    """Ek baar ka code + bot ka t.me link. User link kholkar Start dabata hai."""
+    if not _TG_TOKEN: return jsonify({'error': 'TELEGRAM_BOT_TOKEN set nahi hai (server env)'}), 400
+    try:
+        if not _tg_bot_username['v']:
+            me = _tg_api('getMe')
+            if not me.get('ok'): return jsonify({'error': 'Bot token galat hai'}), 400
+            _tg_bot_username['v'] = me['result']['username']
+        code = secrets.token_hex(4)
+        ud = _user_data(); ud['tg_code'] = code; _save_user_data(ud)
+        return jsonify({'ok': True, 'code': code, 'url': f"https://t.me/{_tg_bot_username['v']}?start={code}"})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/telegram/connect', methods=['POST'])
+def api_tg_connect():
+    """Bot ko bheje gaye '/start <code>' se chat id dhundo aur save karo."""
+    if not _TG_TOKEN: return jsonify({'error': 'TELEGRAM_BOT_TOKEN set nahi hai (server env)'}), 400
+    ud = _user_data(); code = ud.get('tg_code')
+    body = request.get_json(silent=True) or {}
+    chat_id = str(body.get('chat_id') or '').strip()                # manual chat id bhi chalega
+    try:
+        if not chat_id:
+            if not code: return jsonify({'error': 'Pehle "Link banao" dabao'}), 400
+            js = _tg_api('getUpdates', {'limit': 100})
+            for u in reversed(js.get('result', [])):
+                m = u.get('message') or {}
+                if (m.get('text') or '').strip() == f'/start {code}':
+                    chat_id = str(m['chat']['id']); break
+        if not chat_id:
+            return jsonify({'error': 'Abhi tak bot ko Start nahi mila. Link kholkar Telegram me Start dabao, phir dobara Connect dabao.'}), 404
+        ud['telegram_chat_id'] = chat_id; ud.pop('tg_code', None); _save_user_data(ud)
+        ok = _tg_send(chat_id, '✅ <b>StockPro alerts connected!</b>\nAb tumhare price alerts yahan aayenge.')
+        return jsonify({'ok': ok, 'connected': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/telegram/test', methods=['POST'])
+def api_tg_test():
+    ud = _user_data()
+    chat = ud.get('telegram_chat_id') or os.environ.get('TELEGRAM_CHAT_ID', '').strip()
+    if not chat: return jsonify({'error': 'Telegram connect nahi hai'}), 400
+    ok = _tg_send(chat, '🔔 <b>Test alert</b>\nStockPro se Telegram notification sahi chal raha hai ✅')
+    return jsonify({'ok': ok})
+
+@app.route('/api/telegram/disconnect', methods=['POST'])
+def api_tg_disconnect():
+    ud = _user_data(); ud.pop('telegram_chat_id', None); _save_user_data(ud)
+    return jsonify({'ok': True})
+
 # ── Trade Alerts (server-side persistent) ────────────────────────────────────
 @app.route('/api/trade_alerts', methods=['GET'])
 def api_trade_alerts_get():
@@ -2403,6 +2614,9 @@ def api_trade_alerts_trigger(alert_id):
             a['triggered'] = True
             a['triggered_at'] = ltp
             a['triggered_time'] = datetime.datetime.now().isoformat()
+            try:
+                if ltp is not None: _tg_notify_user(ud, a, ltp)
+            except Exception as ex: print(f'[alerts] tg notify: {ex}')
             _save_user_data(ud)
             return jsonify({'ok': True})
     return jsonify({'ok': False, 'reason': 'not found or already triggered'})# ── User data sync API ────────────────────────────────────────────────────────
@@ -3705,6 +3919,10 @@ if os.environ.get('RENDER_EXTERNAL_URL'):
 
 from events_module import register_events
 register_events(app, NSE_SESSION, _login_required, _user_data)
+
+# Server-side price alert checker (market hours me har 30 sec). Band karna ho: env ALERT_WORKER=0
+if ALERT_WORKER_ON:
+    threading.Thread(target=_alert_worker, daemon=True).start()
 
 # IPO cache: disk se turant load, aur background me fresh data fetch (user ko wait na karna pade)
 _ipo_load_disk()
